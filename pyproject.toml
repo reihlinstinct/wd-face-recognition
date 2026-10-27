@@ -1,0 +1,15 @@
+[project]
+name = "wd-face-recognition"
+version = "0.1.0"
+description = "On-device face clustering and naming for the WD My Cloud PR4100 (OS 5 app)"
+requires-python = ">=3.11"
+
+[tool.ruff]
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
