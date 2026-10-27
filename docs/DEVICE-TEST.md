@@ -28,7 +28,7 @@ results come back as one report file.
    `http://<nas-ip>:8088/` ONLY if the LAN is trusted - first-run over HTTP
    sends credentials in cleartext.
 5. **Stop** the app from the dashboard, confirm the page stops answering; **Start** again.
-6. Run the self-test (section 2) FIRST so a report exists and the face DB is
+6. Run the self-test (section 3) FIRST so a report exists and the face DB is
    NON-EMPTY (the self-test's synthetic faces populate it - that is what the
    retention check needs; if a build cannot populate the DB, defer the
    DB-retention part to a later milestone and say so).
@@ -44,7 +44,22 @@ results come back as one report file.
 Each of: install / start / stop / remove is part of M1 acceptance - please report
 pass/fail per step, with a photo/screenshot if anything looks wrong.
 
-## 2. System report + self-test + benchmark (M2 acceptance)
+## 2. Demo run: folder of photos -> grouped faces (2026-11-01)
+1. Copy 5-20 photos with people into a new folder on the NAS, for example
+   `/shares/Public/demo-photos` (copies, not originals).
+2. Read the demo PIN from `/shares/facerecog-reports/demo-pin.txt` via the
+   authenticated WD dashboard file manager (or SMB) - it is created on app
+   start and proves you are the owner, not a random LAN browser.
+3. Open the app page, enter the PIN and the folder path, press **Run demo**.
+4. Expected: the page reports success; `/shares/facerecog-reports/demo-out/`
+   now contains `index.html` and `crops/`. Open `index.html` from the
+   dashboard file manager or over SMB: face crops grouped by person.
+5. PASS: real faces are found and grouped (some false-positive crops and
+   imperfect groupings are expected - crude demo clustering, no alignment).
+   FAIL: the run errors, the page hangs, or no faces are found in photos
+   with clear faces - send the run log plus the report JSON back.
+
+## 3. System report + self-test + benchmark (M2 acceptance)
 0. **System report first:** the self-test records the device's exact baseline:
    firmware/OS version (dashboard version string + `/etc/version`), kernel
    (`uname -a`), glibc version, CPU flags (`cat /proc/cpuinfo`), RAM
@@ -82,7 +97,7 @@ detection+decode <= 2 s/photo at 2 threads, peak RSS <= 1.5 GB, UI backend
 idle <= 256 MB, startup <= 30 s. These values are IN the JSON. That is the
 real-hardware go/no-go data for milestone M2.
 
-## 3. Rules
+## 4. Rules
 - Only the synthetic self-test runs at this stage - the indexer does not scan
   anything until folders are chosen in the UI (default: nothing scanned).
 - If a step fails, stop there and report the step number + what happened;

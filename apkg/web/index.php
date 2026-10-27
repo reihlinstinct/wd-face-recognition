@@ -1,6 +1,70 @@
 <?php
-// WD Face Recognition - M1 skeleton status page.
-$version = '0.1.0';
+// WD Face Recognition - status page + on-device demo runner (issue #20).
+// The demo runs the packaged wdf_demo binary on a user-chosen folder under
+// /shares/ and writes a grouped-faces contact sheet to the reports share.
+// No SSH, no cloud: everything executes on this NAS, originals are untouched.
+//
+// Auth (demo-grade, until the M-wizard lands): the POST requires the
+// per-install demo PIN, readable only through the authenticated WD dashboard
+// or SMB (/shares/facerecog-reports/demo-pin.txt), plus a per-session CSRF
+// token. Runs are serialized with an exclusive lock.
+session_start();
+$version = '0.2.0';
+$appDir = realpath(dirname(__DIR__));
+$demoBin = $appDir . '/bin/wdf_demo';
+$modelsDir = $appDir . '/models';
+$reportsDir = '/shares/facerecog-reports';
+$demoOut = $reportsDir . '/demo-out';
+$pinFile = $reportsDir . '/demo-pin.txt';
+$lockFile = $reportsDir . '/.demo.lock';
+$msg = '';
+$log = '';
+
+if (empty($_SESSION['csrf'])) {
+    $_SESSION['csrf'] = bin2hex(random_bytes(16));
+}
+$csrf = $_SESSION['csrf'];
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $token = (string)($_POST['csrf'] ?? '');
+    $pin = trim((string)($_POST['pin'] ?? ''));
+    $expectedPin = is_file($pinFile) ? trim((string)file_get_contents($pinFile)) : '';
+    $photos = trim((string)($_POST['photos_dir'] ?? ''));
+
+    if (!hash_equals($csrf, $token)) {
+        $msg = 'Form token mismatch - reload the page and try again.';
+    } elseif ($expectedPin === '' || !hash_equals($expectedPin, $pin)) {
+        $msg = 'Wrong demo PIN. Read it from ' . $pinFile
+            . ' via the WD dashboard file manager or SMB.';
+    } elseif ($photos === '' || strpos($photos, '/shares/') !== 0 || strpos($photos, '..') !== false) {
+        $msg = 'Enter an absolute folder path under /shares/ (for example /shares/Public/demo-photos).';
+    } elseif (!is_dir($photos)) {
+        $msg = 'Folder not found on this NAS: ' . htmlspecialchars($photos, ENT_QUOTES, 'UTF-8');
+    } else {
+        if (!is_dir($reportsDir)) {
+            @mkdir($reportsDir, 0777, true);
+        }
+        $lock = fopen($lockFile, 'c');
+        if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
+            $msg = 'A demo run is already in progress - wait for it to finish.';
+        } else {
+            // Fixed output path: previous demo output is replaced, never mixed.
+            exec('rm -rf ' . escapeshellarg($demoOut));
+            $cmd = escapeshellarg($demoBin) . ' ' . escapeshellarg($photos) . ' '
+                . escapeshellarg($modelsDir) . ' ' . escapeshellarg($demoOut) . ' 2 2>&1';
+            exec($cmd, $lines, $rc);
+            flock($lock, LOCK_UN);
+            fclose($lock);
+            $log = htmlspecialchars(implode("\n", (array)$lines), ENT_QUOTES, 'UTF-8');
+            if ($rc === 0 && is_file($demoOut . '/index.html')) {
+                $msg = 'Demo finished. Open ' . $demoOut . '/index.html via the WD dashboard '
+                    . 'file manager or SMB - it shows your photos grouped by person.';
+            } else {
+                $msg = 'Demo failed (exit ' . (int)$rc . '). Send the log below back with the report.';
+            }
+        }
+    }
+}
 header('Content-Type: text/html; charset=utf-8');
 ?>
 <!doctype html>
@@ -9,11 +73,36 @@ header('Content-Type: text/html; charset=utf-8');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WD Face Recognition</title>
+<style>
+body{font-family:system-ui;margin:16px;max-width:40em}
+input[type=text],input[type=password]{width:100%;padding:8px;font-size:1em;box-sizing:border-box}
+button{padding:10px 18px;font-size:1em}
+pre{background:#eee;padding:8px;overflow:auto;font-size:.85em}
+.msg{padding:10px;background:#e8f2e8;border-radius:6px}
+label{font-weight:600}
+</style>
 </head>
 <body>
 <h1>WD Face Recognition</h1>
-<p>Skeleton app installed. Version <?= htmlspecialchars($version, ENT_QUOTES, 'UTF-8') ?>.</p>
-<p>Face indexing is not implemented yet; it arrives in milestone 3.
+<p>Version <?= htmlspecialchars($version, ENT_QUOTES, 'UTF-8') ?>.
 All processing in this app stays on this NAS.</p>
+<h2>Demo: group a folder of photos by person</h2>
+<form method="post">
+<input type="hidden" name="csrf" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
+<label for="pin">Demo PIN</label> (read it from <?= htmlspecialchars($pinFile, ENT_QUOTES, 'UTF-8') ?>
+via the WD dashboard file manager or SMB):<br>
+<input type="password" id="pin" name="pin" required><br><br>
+<label for="photos_dir">Photo folder</label> (absolute path under /shares/):<br>
+<input type="text" id="photos_dir" name="photos_dir"
+       placeholder="/shares/Public/demo-photos" required><br><br>
+<button type="submit">Run demo</button>
+</form>
+<?php if ($msg !== ''): ?>
+<p class="msg"><?= $msg ?></p>
+<?php endif; ?>
+<?php if ($log !== ''): ?>
+<h3>Run log</h3>
+<pre><?= $log ?></pre>
+<?php endif; ?>
 </body>
 </html>

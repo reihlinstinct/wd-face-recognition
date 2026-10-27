@@ -22,6 +22,17 @@ self_check() {
 }
 self_check "${APP_PATH}/bin/wdf-worker"
 self_check "${APP_PATH}/bin/wdf-service"
+self_check "${APP_PATH}/bin/wdf_demo"
+
+# Demo runner auth: a per-install PIN written to the reports share. Reading
+# it needs the authenticated WD dashboard (or SMB) - the same independent
+# channel as the TLS fingerprint - so a bare LAN browser cannot run the demo.
+PIN_FILE="/shares/facerecog-reports/demo-pin.txt"
+if [ ! -s "${PIN_FILE}" ]; then
+	mkdir -p /shares/facerecog-reports
+	dd if=/dev/urandom bs=6 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' > "${PIN_FILE}"
+	log "demo PIN written to ${PIN_FILE}"
+fi
 
 if [ "${rc}" -ne 0 ]; then
 	log "one or more binary self-checks failed"
