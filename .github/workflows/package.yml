@@ -1,0 +1,51 @@
+name: package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  apkg:
+    name: Build apkg (.bin) for My Cloud PR4100
+    runs-on: ubuntu-latest
+    container: debian:11
+    steps:
+      - name: Install build tools
+        run: |
+          # Debian 11 (Bullseye) is EOL: its suites live on archive.debian.org.
+          printf 'deb http://archive.debian.org/debian bullseye main\n' \
+            > /etc/apt/sources.list
+          printf 'deb http://archive.debian.org/debian-security bullseye-security main\n' \
+            >> /etc/apt/sources.list
+          echo 'Acquire::Check-Valid-Until "false";' \
+            > /etc/apt/apt.conf.d/99no-check-valid-until
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates cmake curl file git
+      # Checkout after git is installed: debian:11 has no git by default.
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, musl target)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable \
+              --target x86_64-unknown-linux-musl
+          echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+
+      - name: Build the apkg package
+        run: packaging/build-apkg.sh
+
+      - name: Verify the package exists
+        run: |
+          set -eux
+          bin_path="$(find packages -name 'MyCloudPR4100_*.bin' | head -n 1)"
+          test -n "${bin_path}"
+          file "${bin_path}"
+
+      - name: Upload the apkg package
+        uses: actions/upload-artifact@v4
+        with:
+          name: wd-face-recognition-apkg
+          path: packages/*.bin
+          retention-days: 14
