@@ -51,12 +51,10 @@ jobs:
       - name: Build the apkg package
         run: packaging/build-apkg.sh
 
-      - name: Verify the package exists
-        run: |
-          set -eux
-          bin_path="$(find packages -name 'MyCloudPR4100_*.bin' | head -n 1)"
-          test -n "${bin_path}"
-          file "${bin_path}"
+      - name: Verify the .bin package (signature, layout, fields)
+        # Regression gate (issue #22): empty apkg.sign, wrong payload root dir,
+        # header/apkg.rc mismatches and a non-running demo binary all fail here.
+        run: packaging/verify-apkg.sh
 
       - name: Upload the apkg package
         uses: actions/upload-artifact@v4

@@ -1,10 +1,10 @@
 Package:			wd-face-recognition
-Version:			0.2.0
+Version:			0.2.1
 Packager:			Instinct
 Email:
 Homepage:			https://github.com/reihlinstinct/wd-face-recognition
 Description:		On-device face recognition for WD My Cloud OS 5. All processing stays on the NAS.
-Icon:				logo.svg
+Icon:				logo.png
 AddonShowName:		WD Face Recognition
 AddonIndexPage:		index.php
 AddonUsedPort:
@@ -17,7 +17,7 @@ StartDepend:
 StartConflict:
 CenterType:			0
 UserControl:		0
-MinFWVer:			5.27.157
+MinFWVer:			5.27.100
 MaxFWVer:
 IndividualFlag:		1
 Hidden:				off
