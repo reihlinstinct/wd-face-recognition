@@ -15,5 +15,6 @@ Languages: Hebrew or English. No personal email is published on purpose.
   repo, its issues/PRs, tests, CI artifacts, or logs - synthetic fixtures only.
 - No credentials, tokens or personal data belong in this repo; it is scanned
   with GitHub secret scanning + push protection, and gitleaks runs in CI.
-- The app itself is designed to make no outbound network connections; treat
-  any code introducing one as a security issue.
+- The app must NEVER make outbound network connections - 100% on-device, no
+  cloud calls, no telemetry, no exceptions. Treat any code introducing one as
+  a security issue.
