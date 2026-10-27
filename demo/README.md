@@ -27,3 +27,12 @@ cmake --build build/demo --parallel
 build/demo/wdf_demo <photos_dir> /tmp/wdf-models /tmp/wdf-demo-out 2
 xdg-open /tmp/wdf-demo-out/index.html   # or copy the folder to your phone
 ```
+
+## On-device web page
+
+The packaged app serves a small page (app icon in the WD dashboard) that runs
+the demo on a folder you pick: either paste an absolute path under `/shares/`
+(spaces and Hebrew names are fine as-is) or click "Browse folders on this
+NAS" to walk the share tree - each folder shows how many JPEGs a run would
+find in it (same caps as the scanner). The listing is server-rendered,
+restricted to `/shares`, and never follows symlinks.

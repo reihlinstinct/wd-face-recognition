@@ -11,6 +11,7 @@
 session_start();
 require_once __DIR__ . '/paths.php';
 require_once __DIR__ . '/run.php';
+require_once __DIR__ . '/browse.php';
 $version = '0.2.1';
 $appDir = realpath(dirname(__DIR__));
 $demoBin = $appDir . '/bin/wdf_demo';
@@ -21,6 +22,23 @@ $pinFile = $reportsDir . '/demo-pin.txt';
 $lockFile = $reportsDir . '/.demo.lock';
 $msg = '';
 $log = '';
+
+// Folder browser (issue #26): read-only GET navigation under /shares.
+// "Use this folder" prefills the form; the POST still validates the path.
+$browseHtml = '';
+$prefillDir = '';
+if (isset($_GET['browse'])) {
+    $listing = wdf_browse_list((string)$_GET['browse']);
+    $browseHtml = $listing === null
+        ? '<p class="msg">Folder not found or not allowed under /shares.</p>'
+        : wdf_browse_render($listing);
+} elseif (isset($_GET['select'])) {
+    $prefillDir = (string)$_GET['select'];
+    $listing = wdf_browse_list($prefillDir);
+    if ($listing !== null) {
+        $browseHtml = wdf_browse_render($listing);
+    }
+}
 
 if (empty($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(16));
@@ -81,6 +99,8 @@ body{font-family:system-ui;margin:16px;max-width:40em}
 input[type=text],input[type=password]{width:100%;padding:8px;font-size:1em;box-sizing:border-box}
 button{padding:10px 18px;font-size:1em}
 pre{background:#eee;padding:8px;overflow:auto;font-size:.85em}
+.browse ul{list-style:none;padding-left:8px;line-height:1.9}
+.browse{border:1px solid #ccc;border-radius:6px;padding:8px 12px;margin:12px 0}
 .msg{padding:10px;background:#e8f2e8;border-radius:6px}
 label{font-weight:600}
 </style>
@@ -97,9 +117,12 @@ via the WD dashboard file manager or SMB):<br>
 <input type="password" id="pin" name="pin" required><br><br>
 <label for="photos_dir">Photo folder</label> (absolute path under /shares/; subfolders are scanned too, up to 8 levels and 1000 photos per run; spaces and Hebrew names are fine - paste as-is, no backslashes needed):<br>
 <input type="text" id="photos_dir" name="photos_dir"
-       placeholder="/shares/Public/demo-photos" required><br><br>
+       placeholder="/shares/Public/demo-photos"
+       value="<?= htmlspecialchars($prefillDir, ENT_QUOTES, 'UTF-8') ?>" required><br>
+<a href="?browse=/shares">Browse folders on this NAS</a><br><br>
 <button type="submit">Run demo</button>
 </form>
+<?= $browseHtml ?>
 <?php if ($msg !== ''): ?>
 <p class="msg"><?= $msg ?></p>
 <?php endif; ?>
