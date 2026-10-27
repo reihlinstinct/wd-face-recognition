@@ -1,7 +1,7 @@
 # WD Face Recognition — Design Doc
 **On-device face recognition for WD My Cloud PR4100, packaged as a native My Cloud OS 5 app**
 
-Status: draft v0.25 · 2026-10-27 · Owner: the owner
+Status: draft v0.26 · 2026-10-27 · Owner: the owner
 
 ---
 
@@ -305,6 +305,33 @@ survives outside the app (Lightroom/digiKam/Photos-compatible):
   `RegionPersonDisplayName`; keywords get the name too (helps text search in
   other tools).
 
+### Face-data portability (export/import)
+Move ONLY the face data (no photos) to another device that holds a subset of the
+same photo library (e.g. a backup NAS), and let it attach the data to its copies.
+
+- **Bundle:** versioned schema (semver field, forward-compatible readers);
+  contains per person: names (display + sort), ignore/purge states; per face:
+  photo reference, face box, person link, OPTIONAL embedding (off by default -
+  smallest/safest bundle; on when the target should skip re-recognition);
+  per photo: content hash, EXIF date, GPS/manual locations. No photo pixels,
+  no thumbnails.
+- **Encryption:** optional passphrase encryption (e.g. age/XChaCha20-Poly1305)
+  - recommended ON, this is biometric data; bundle permissions 600.
+- **Matching on import:** primary key is the photo's **content hash**
+  (SHA-256 of the file) - robust to renames and moves. Fallback: perceptual
+  hash (pHash) for re-encoded/resized copies - always clearly LABELLED as
+  approximate and shown for confirmation before attaching.
+- **Pending records:** faces whose photo is not (yet) on the target stay in a
+  pending queue; they attach automatically when a matching photo appears in a
+  later scan.
+- **Conflicts:** target-side existing data wins by default; merge rules per
+  field (names merge, boxes add, newer manual correction wins); every decision
+  logged.
+- **Dry-run first:** import shows exactly what would attach/merge/pend before
+  writing anything; undoable via the activity log (purge rules still apply).
+- Fully offline: bundles move via the UI download/upload or a share; no
+  outbound calls.
+
 ### Privacy (hard requirements)
 - All processing local; the app makes no outbound network connections (enforced in
   code review; the UI bundles every asset).
@@ -360,7 +387,8 @@ survives outside the app (Lightroom/digiKam/Photos-compatible):
    NAS are never touched. NAS-safe limits: ZIP is streamed (no full archive in
    RAM), memory-capped, with progress shown, cancel, and resumable batches; an
    estimated total size is shown before starting. All batches logged.
-8. **Hardening & release** — packaging polish, docs, v1.0.0 release notes.
+8. **Face-data portability (export/import)** — see "Face-data portability" section.
+9. **Hardening & release** — packaging polish, docs, v1.0.0 release notes.
 
 ## 7. Open questions
 
