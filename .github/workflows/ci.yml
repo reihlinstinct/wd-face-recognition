@@ -21,8 +21,10 @@ jobs:
       - run: ruff check src tests
       - name: ShellCheck (packaging scripts, when present)
         run: |
-          if compgen -G "scripts/*.sh" > /dev/null || compgen -G "apkg/*.sh" > /dev/null; then
-            shellcheck scripts/*.sh apkg/*.sh
+          shopt -s nullglob
+          scripts=(scripts/*.sh apkg/*.sh)
+          if [ ${#scripts[@]} -gt 0 ]; then
+            shellcheck "${scripts[@]}"
           else
             echo "no shell scripts yet - skipping"
           fi
