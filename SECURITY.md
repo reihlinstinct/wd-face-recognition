@@ -12,8 +12,7 @@ Languages: Hebrew or English. No personal email is published on purpose.
 
 - This app processes personal photos ON the owner's NAS only. No real photos,
   face embeddings, names of real people, or private NAS data belong in this
-  repo, its issues/PRs, tests, CI artifacts, or logs - synthetic fixtures only
-  (see CONTRIBUTING.md and docs/DESIGN.md, privacy hard-requirements).
+  repo, its issues/PRs, tests, CI artifacts, or logs - synthetic fixtures only.
 - No credentials, tokens or personal data belong in this repo; it is scanned
   with GitHub secret scanning + push protection, and gitleaks runs in CI.
 - The app itself is designed to make no outbound network connections; treat
