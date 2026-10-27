@@ -1,0 +1,99 @@
+name: demo
+
+on:
+  pull_request:
+    paths: ["demo/**", ".github/workflows/demo.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wdf-demo:
+    name: Build + smoke-test wdf_demo (issue #18)
+    runs-on: ubuntu-latest
+    container:
+      image: debian:11
+      options: --memory=4g --cpus=2
+    steps:
+      - name: Install build tools
+        run: |
+          # Debian 11 (Bullseye) is EOL: its suites live on archive.debian.org.
+          printf 'deb http://archive.debian.org/debian bullseye main\n' \
+            > /etc/apt/sources.list
+          printf 'deb http://archive.debian.org/debian-security bullseye-security main\n' \
+            >> /etc/apt/sources.list
+          echo 'Acquire::Check-Valid-Until "false";' \
+            > /etc/apt/apt.conf.d/99no-check-valid-until
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates cmake curl git unzip pkg-config \
+            libjpeg62-turbo-dev protobuf-compiler libprotobuf-dev python3 python3-pip
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Python deps
+        run: python3 -m pip install --no-cache-dir pillow onnx-simplifier==0.4.36 pnnx==20261020
+
+      - name: Cache the ncnn build
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ncnn-build
+          key: ncnn-20261020-noavx-v2
+
+      - name: Build ncnn (static, no AVX) + onnx2ncnn
+        run: bench/ncnn/build-ncnn.sh /tmp/ncnn-build
+
+      - name: Fetch + convert models (buffalo_s, pinned)
+        run: bench/ncnn/get-models.sh /tmp/wdf-models /tmp/ncnn-build/install
+
+      - name: Build wdf_demo
+        run: |
+          cmake -S demo -B build/demo -DCMAKE_BUILD_TYPE=Release \
+            -DNCNN_INSTALL_DIR=/tmp/ncnn-build/install
+          cmake --build build/demo --parallel
+
+      - name: Smoke test on synthetic photos (no faces expected)
+        run: |
+          python3 bench/assets/gen_assets.py /tmp/wdf-synth
+          build/demo/wdf_demo /tmp/wdf-synth /tmp/wdf-models /tmp/wdf-demo-synth 2
+          test -f /tmp/wdf-demo-synth/index.html && echo "synthetic index.html written"
+
+      - name: End-to-end test on real portrait photos (pinned, public domain)
+        run: |
+          demo/get-test-photos.sh /tmp/wdf-photos
+          build/demo/wdf_demo /tmp/wdf-photos /tmp/wdf-models /tmp/wdf-demo-out 2 | tee /tmp/demo.log
+          test -f /tmp/wdf-demo-out/index.html
+          detected=$(grep -c ': faces=[1-9]' /tmp/demo.log || true)
+          echo "photos with faces detected: $detected"
+          test "$detected" -ge 2
+          crops=$(ls /tmp/wdf-demo-out/crops/*.jpg | wc -l)
+          echo "crop files: $crops"
+          test "$crops" -ge 3
+          grep -q '<h2>Person 1' /tmp/wdf-demo-out/index.html
+          grep -q "title='einstein.jpg'" /tmp/wdf-demo-out/index.html
+
+      - name: "Regression - corrupt and CMYK JPEGs are skipped, not fatal"
+        run: |
+          mkdir -p /tmp/wdf-bad
+          python3 bench/assets/gen_assets.py /tmp/wdf-bad
+          head -c 2000 /dev/urandom > /tmp/wdf-bad/garbage.jpg
+          python3 -c "from PIL import Image; Image.new('CMYK', (64, 64)).save('/tmp/wdf-bad/cmyk.jpg', 'JPEG')"
+          # truncate one good photo mid-stream
+          f=$(ls /tmp/wdf-bad/*.jpg | grep -v -e garbage -e cmyk | head -1)
+          sz=$(stat -c %s "$f"); head -c $((sz / 3)) "$f" > /tmp/wdf-bad/truncated.jpg
+          build/demo/wdf_demo /tmp/wdf-bad /tmp/wdf-models /tmp/wdf-demo-bad 2 2>&1 | tee /tmp/bad.log
+          test -f /tmp/wdf-demo-bad/index.html
+          # each deterministic malformed fixture must be reported and skipped
+          grep -q 'skip undecodable garbage.jpg' /tmp/bad.log
+          grep -q 'skip undecodable cmyk.jpg' /tmp/bad.log
+          # truncated.jpg exercises libjpeg's warning path (recoverable); only
+          # required not to crash, which reaching index.html already proves
+          echo "corrupt fixtures skipped cleanly"
+
+      - name: Upload demo output
+        uses: actions/upload-artifact@v4
+        with:
+          name: wdf-demo-output
+          path: /tmp/wdf-demo-out/
