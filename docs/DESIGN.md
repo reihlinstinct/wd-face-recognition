@@ -1,7 +1,7 @@
 # WD Face Recognition — Design Doc
 **On-device face recognition for WD My Cloud PR4100, packaged as a native My Cloud OS 5 app**
 
-Status: draft v0.39 · 2026-10-27 · Owner: the owner
+Status: draft v0.40 · 2026-10-27 · Owner: the owner
 
 ---
 
@@ -81,8 +81,8 @@ Minimize libraries that are not already on the device:
     meets the API shape.
   - MapLibre GL (UI bundle) - NEEDED for the pin-drop map; assets bundled, no
     CDN.
-  - age/XChaCha20 crypto for bundle encryption - NEEDED only for M8; small,
-    audited crate.
+  - age-format crypto for bundle encryption - NEEDED only for M8; small,
+    audited implementation.
   - GeoNames gazetteer data - data, not code; sized in M2.
 - Adding ANY new dependency requires naming it in the PR body with its
   justification; CI fails on an undeclared addition (lockfile diff check).
@@ -193,9 +193,13 @@ is not enough:
   setup token written to a path readable only via the authenticated WD
   dashboard file manager.)
 - **Transport: HTTPS by default.** The app generates a self-signed certificate
-  at install and serves :8443; its SHA-256 fingerprint is shown on the setup
-  screen so the owner can verify it against the browser warning (the warning
-  alone is NOT authentication - the fingerprint check is). Plain HTTP on :8088
+  at install and serves :8443. The certificate's SHA-256 fingerprint is
+  delivered OUT OF BAND: written at install to
+  `/shares/facerecog-reports/fingerprint.txt`, readable only via the
+  authenticated WD dashboard file manager. The owner compares the browser's
+  fingerprint against THAT file before entering any credentials - a
+  fingerprint shown by the setup page itself proves nothing (an on-path
+  attacker could show a matching one). Plain HTTP on :8088
   is a fallback the owner must explicitly enable, with a warning that
   credentials cross the LAN in cleartext. Enrollment (which sends the WD
   ADMIN credentials) is REFUSED over plain HTTP - it requires HTTPS, or the
@@ -287,7 +291,9 @@ survives outside the app (Lightroom/digiKam/Photos-compatible):
     case variants) collide on `photo.xmp`. Rule: whenever a basename maps to
     more than one distinct file, the app writes the full-filename form
     (`IMG_1234.CR2.xmp`, ...) for each of them; collision-free basenames use
-    `photo.xmp`. Detection is by directory listing at write time.
+    `photo.xmp`. Collision state is RE-CHECKED under a per-directory lock
+    immediately before the atomic commit; if the directory changed or the
+    state cannot be confirmed, the full-filename form is used.
   - An existing sidecar that fails to parse is NEVER overwritten or "fixed": the
     file is skipped, logged, and surfaced in the UI for the owner to decide.
   - Writes are atomic: temp file + fsync + rename; a crash mid-write cannot leave
@@ -435,10 +441,12 @@ same photo library (e.g. a backup NAS), and let it attach the data to its copies
   smallest/safest bundle; on when the target should skip re-recognition);
   per photo: content hash, EXIF date, GPS/manual locations. No photo pixels,
   no thumbnails.
-- **Encryption: REQUIRED on export** (age/XChaCha20-Poly1305, owner passphrase)
-  for every bundle - this is biometric data and file permissions (600) protect
-  only the NAS copy, not a downloaded one. The import side accepts only
-  encrypted bundles.
+- **Encryption: REQUIRED on export** for every bundle - this is biometric data
+  and file permissions (600) protect only the NAS copy, not a downloaded one.
+  Format: the **age format with a passphrase recipient** (ChaCha20-Poly1305
+  payload, scrypt-wrapped key) - one precise contract, age-compatible tools
+  can also open the bundle off-device. The import side accepts only encrypted
+  bundles.
 - **Matching on import:** primary key is the photo's **content hash**
   (SHA-256 of the file) - robust to renames and moves. Fallback: perceptual
   hash (pHash) for re-encoded/resized copies - clearly LABELLED approximate and
