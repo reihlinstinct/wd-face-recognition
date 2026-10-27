@@ -1,5 +1,6 @@
 // wdf_demo: first visible end-to-end slice (issue #18).
-// Scans a folder of JPEGs, detects faces (SCRFD-500M), embeds them
+// Scans a folder of JPEGs recursively (scan.h, issue #24), detects faces
+// (SCRFD-500M), embeds them
 // (MobileFaceNet ArcFace), clusters by cosine similarity, and writes a
 // mobile-friendly HTML contact sheet grouped by person.
 //
@@ -20,12 +21,13 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
-#include <dirent.h>
 #include <map>
 #include <string>
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <vector>
+
+#include "scan.h"
 
 namespace {
 
@@ -321,19 +323,11 @@ struct UnionFind {
     void unite(int a, int b) { parent[find(a)] = find(b); }
 };
 
-bool ends_jpeg(const std::string& n) {
-    std::string lower = n;
-    for (char& c : lower) c = (char)tolower((unsigned char)c);
-    return lower.size() >= 4 &&
-           (lower.compare(lower.size() - 4, 4, ".jpg") == 0 ||
-            (lower.size() >= 5 && lower.compare(lower.size() - 5, 5, ".jpeg") == 0));
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "--version") == 0) {
-        std::printf("wdf_demo 0.2.0 (SCRFD-500M + MobileFaceNet, ncnn)\n");
+        std::printf("wdf_demo 0.2.1 (SCRFD-500M + MobileFaceNet, ncnn)\n");
         return 0;
     }
     if (argc < 4) {
@@ -353,18 +347,26 @@ int main(int argc, char** argv) {
     mkdir(out_dir.c_str(), 0777);
     mkdir((out_dir + "/crops").c_str(), 0777);
 
-    std::vector<std::string> photos;
-    DIR* d = opendir(photos_dir.c_str());
-    if (!d) {
-        std::fprintf(stderr, "cannot open %s\n", photos_dir.c_str());
-        return 1;
+    wdf::ScanOptions scan_opts;  // demo caps: max_depth 8, max_photos 1000
+    wdf::ScanResult scan = wdf::scan_photos(photos_dir, scan_opts);
+    if (scan.photos.empty()) {
+        struct stat st;
+        if (stat(photos_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            std::fprintf(stderr, "cannot open %s\n", photos_dir.c_str());
+            return 1;
+        }
     }
-    while (dirent* e = readdir(d)) {
-        if (ends_jpeg(e->d_name)) photos.push_back(e->d_name);
-    }
-    closedir(d);
-    std::sort(photos.begin(), photos.end());
+    const std::vector<std::string>& photos = scan.photos;
     std::printf("photos=%zu\n", photos.size());
+    if (scan.truncated_photos)
+        std::printf("note: scan stopped at the %zu-photo demo cap\n",
+                    scan_opts.max_photos);
+    if (scan.truncated_depth)
+        std::printf("note: folders deeper than %d levels were skipped\n",
+                    scan_opts.max_depth);
+    if (scan.truncated_entries)
+        std::printf("note: scan stopped after examining %zu entries (work budget)\n",
+                    scan_opts.max_entries);
 
     struct Rec {
         std::string photo;
