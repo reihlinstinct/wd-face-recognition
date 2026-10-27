@@ -332,6 +332,10 @@ bool ends_jpeg(const std::string& n) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc >= 2 && std::strcmp(argv[1], "--version") == 0) {
+        std::printf("wdf_demo 0.2.0 (SCRFD-500M + MobileFaceNet, ncnn)\n");
+        return 0;
+    }
     if (argc < 4) {
         std::fprintf(stderr, "usage: %s <photos_dir> <models_dir> <out_dir> [threads]\n", argv[0]);
         return 2;

@@ -55,8 +55,30 @@ cargo build --release --target x86_64-unknown-linux-musl \
 	--target-dir "${SERVICE_TARGET_DIR}"
 check_static "${SERVICE_TARGET_DIR}/x86_64-unknown-linux-musl/release/wdf-service"
 
+log "2b/4 demo binary (wdf_demo, static) + pinned models"
+require unzip
+require python3
+"${REPO_ROOT}/bench/ncnn/build-ncnn.sh" "${NCNN_BUILD:-/tmp/ncnn-build}"
+cmake -S "${REPO_ROOT}/demo" -B "${REPO_ROOT}/build/demo" \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DNCNN_INSTALL_DIR="${NCNN_BUILD:-/tmp/ncnn-build}/install" \
+	-DWDF_DEMO_STATIC=ON
+cmake --build "${REPO_ROOT}/build/demo" --parallel
+check_static "${REPO_ROOT}/build/demo/wdf_demo"
+
+# Convert models in the build tree, stage only the final ncnn files.
+"${REPO_ROOT}/bench/ncnn/get-models.sh" "${REPO_ROOT}/build/models" \
+	"${NCNN_BUILD:-/tmp/ncnn-build}/install"
+mkdir -p "${REPO_ROOT}/apkg/models"
+cp "${REPO_ROOT}/build/models/scrfd_500m.param" \
+	"${REPO_ROOT}/build/models/scrfd_500m.bin" \
+	"${REPO_ROOT}/build/models/mobilefacenet.param" \
+	"${REPO_ROOT}/build/models/mobilefacenet.bin" \
+	"${REPO_ROOT}/apkg/models/"
+
 log "3/4 staging binaries into apkg/bin"
 mkdir -p "${STAGE_BIN}"
+cp "${REPO_ROOT}/build/demo/wdf_demo" "${STAGE_BIN}/"
 cp "${WORKER_BUILD}/wdf-worker" "${STAGE_BIN}/"
 cp "${SERVICE_TARGET_DIR}/x86_64-unknown-linux-musl/release/wdf-service" "${STAGE_BIN}/"
 
