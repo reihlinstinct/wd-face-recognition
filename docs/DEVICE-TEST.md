@@ -72,7 +72,10 @@ thread setting (2 threads) and on 1 thread; per-face embedding latency; peak
 RSS; CPU%/RSS under the 80% cap; HEIC support check; device baseline (step 0);
 build flags PROVING the no-AVX build (compiled-in flag list); GeoNames
 gazetteer on-disk size and in-RAM lookup cost. A worker network-isolation
-check (connection attempt must FAIL) is included too.
+check is included too: the test starts a listener the worker COULD otherwise
+reach (on the LAN, or 127.0.0.1 in the parent network namespace) and has the
+sandboxed worker try to connect - the attempt MUST fail, which can then only
+mean the sandbox enforced it (not that nothing was listening).
 Test images: synthetic 12 MP JPEGs (real-photo resolution - small images would
 understate decode cost). Pass/fail thresholds (from the design budgets):
 detection+decode <= 2 s/photo at 2 threads, peak RSS <= 1.5 GB, UI backend

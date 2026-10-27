@@ -1,7 +1,7 @@
 # WD Face Recognition — Design Doc
 **On-device face recognition for WD My Cloud PR4100, packaged as a native My Cloud OS 5 app**
 
-Status: draft v0.40 · 2026-10-27 · Owner: the owner
+Status: draft v0.41 · 2026-10-27 · Owner: the owner
 
 ---
 
@@ -552,8 +552,13 @@ untrusted bytes (malformed JPEG/XMP is a classic CVE vector in C libraries).
 Rust's memory safety is the strongest answer for the parsers we WRITE. But
 the C libraries we must use (ncnn, Exiv2, libjpeg-turbo) stay C/C++ in every
 option - so the real control is ISOLATION: the worker that touches photo
-bytes runs sandboxed (seccomp filter, rlimits, no network namespace,
-read-only mounts) whatever language wraps it.
+bytes runs sandboxed whatever language wraps it: an ISOLATED network
+namespace (loopback-only or no interfaces at all) so no outbound connection
+is possible, PLUS a seccomp filter denying socket()/connect() where feasible,
+PLUS rlimits and read-only mounts. The no-outbound requirement is therefore
+enforced on the worker even if a C parser is compromised; a CI/device check
+proves it (the self-test has the worker attempt a connection that would
+otherwise succeed - it must fail, see DEVICE-TEST).
 
 **(g2) Go explicitly (owner asked "maybe Go, if it's supported"):**
 Platform support: YES - Go targets linux/amd64, which the PR4100 (x86_64, OS5)
