@@ -1,7 +1,7 @@
 # WD Face Recognition — Design Doc
 **On-device face recognition for WD My Cloud PR4100, packaged as a native My Cloud OS 5 app**
 
-Status: draft v0.38 · 2026-10-27 · Owner: the owner
+Status: draft v0.39 · 2026-10-27 · Owner: the owner
 
 ---
 
@@ -34,27 +34,26 @@ device in milestones 1-3 before we rely on them.
 InsightFace stack (heavy RAM, prebuilt wheels tuned for AVX). The inference engine must
 work well on SSE4.2-only silicon.
 
-## 2c. Installation-simplicity principle (owner rule, 2026-10-27)
+## 2a. Performance-first principle (owner rule for ALL contributors)
 
-Installing and living with the app must be simple for a non-technical owner:
+The target is a weak device (N3710, 4 GB). Efficiency is a feature, and it is
+every contributor's job (Instinct, Claude, Tab):
 
-- **One self-contained `.bin`** installed from the WD dashboard (Apps ->
-  Install an app manually). No SSH, no CLI, no extra packages, no runtime
-  downloads (see 2b).
-- **First-run wizard** (part of the first-run claim in the access-control
-  section): 1) create the password, 2) choose folders to scan (default:
-  nothing), 3) done - scanning starts on schedule. Sensible defaults for
-  everything else; advanced settings available but never required.
-- **Upgrade path:** install the new `.bin` over the old via the dashboard;
-  data (DB, names, sidecars, settings) is kept; schema migrations run
-  automatically and are tested in CI.
-- **Uninstall path / retention contract:** dashboard remove keeps BOTH the
-  face DB and the reports share (and the owner's settings), so an
-  uninstall/reinstall cycle loses nothing; the explicit "remove data too"
-  option deletes all three. Verified on-device in DEVICE-TEST.
-- **The DEVICE-TEST run sheet covers exactly this flow** (install / first-run
-  wizard / start / stop / upgrade / remove) so simplicity is verified on the
-  real device, not assumed.
+- **Budgets per component** (validated in M2, enforced in CI): indexer worker
+  <= 1.5 GB RSS and <= 80% CPU under load; web UI backend <= 256 MB RSS idle;
+  app startup to ready <= 30 s on-device; UI pages <= 1 MB initial payload
+  (map/tile views included - tiles stream, no bulk prefetch).
+- **Lightweight models only:** the smallest model that meets the accuracy bar
+  (SCRFD-0.5GF class detector, MobileFaceNet-class recognizer), quantized
+  (int8) where accuracy holds; any model upgrade must re-justify its budget.
+- **Bounded everything:** streaming everywhere (ZIP export, tile serving, image
+  decode), fixed-size queues, no whole-library structures in RAM; incremental
+  scanning by mtime delta, never a blind full re-walk.
+- **I/O discipline:** batched SQLite writes, WAL, read-ahead-friendly sequential
+  file access, ionice idle class.
+- **Regression gates:** CI runs the benchmark suite with THRESHOLDS - a PR that
+  regresses latency, RSS or payload beyond the budget fails CI. The on-device
+  self-test remains the final authority.
 
 ## 2b. Dependency-minimalism principle (owner rule, 2026-10-27)
 
@@ -103,26 +102,28 @@ Minimize libraries that are not already on the device:
   missing library/symbol in clear language on the setup screen (and in the
   self-test report) instead of dying silently.
 
-## 2a. Performance-first principle (owner rule for ALL contributors)
+## 2c. Installation-simplicity principle (owner rule, 2026-10-27)
 
-The target is a weak device (N3710, 4 GB). Efficiency is a feature, and it is
-every contributor's job (Instinct, Claude, Tab):
+Installing and living with the app must be simple for a non-technical owner:
 
-- **Budgets per component** (validated in M2, enforced in CI): indexer worker
-  <= 1.5 GB RSS and <= 80% CPU under load; web UI backend <= 256 MB RSS idle;
-  app startup to ready <= 30 s on-device; UI pages <= 1 MB initial payload
-  (map/tile views included - tiles stream, no bulk prefetch).
-- **Lightweight models only:** the smallest model that meets the accuracy bar
-  (SCRFD-0.5GF class detector, MobileFaceNet-class recognizer), quantized
-  (int8) where accuracy holds; any model upgrade must re-justify its budget.
-- **Bounded everything:** streaming everywhere (ZIP export, tile serving, image
-  decode), fixed-size queues, no whole-library structures in RAM; incremental
-  scanning by mtime delta, never a blind full re-walk.
-- **I/O discipline:** batched SQLite writes, WAL, read-ahead-friendly sequential
-  file access, ionice idle class.
-- **Regression gates:** CI runs the benchmark suite with THRESHOLDS - a PR that
-  regresses latency, RSS or payload beyond the budget fails CI. The on-device
-  self-test remains the final authority.
+- **One self-contained `.bin`** installed from the WD dashboard (Apps ->
+  Install an app manually). No SSH, no CLI, no extra packages, no runtime
+  downloads (see 2b).
+- **First-run wizard** (part of the first-run claim in the access-control
+  section): 1) enter the WD dashboard admin credentials (owner check), 2)
+  create the app password, 3) choose folders to scan (default: nothing),
+  4) done - scanning starts on schedule. Sensible defaults for everything
+  else; advanced settings available but never required.
+- **Upgrade path:** install the new `.bin` over the old via the dashboard;
+  data (DB, names, sidecars, settings) is kept; schema migrations run
+  automatically and are tested in CI.
+- **Uninstall path / retention contract:** dashboard remove keeps BOTH the
+  face DB and the reports share (and the owner's settings), so an
+  uninstall/reinstall cycle loses nothing; the explicit "remove data too"
+  option deletes all three. Verified on-device in DEVICE-TEST.
+- **The DEVICE-TEST run sheet covers exactly this flow** (install / first-run
+  wizard / start / stop / upgrade / remove) so simplicity is verified on the
+  real device, not assumed.
 
 ## 3. Feasibility verdict
 
@@ -196,8 +197,10 @@ is not enough:
   screen so the owner can verify it against the browser warning (the warning
   alone is NOT authentication - the fingerprint check is). Plain HTTP on :8088
   is a fallback the owner must explicitly enable, with a warning that
-  credentials cross the LAN in cleartext; it is refused during first-run
-  enrollment unless the owner confirms the LAN is trusted.
+  credentials cross the LAN in cleartext. Enrollment (which sends the WD
+  ADMIN credentials) is REFUSED over plain HTTP - it requires HTTPS, or the
+  owner's explicit trusted-LAN confirmation before HTTP enrollment is
+  allowed at all.
 - **Bind address:** localhost + the NAS LAN interface only; never exposed to the
   internet by the app itself. No UPnP/NAT traversal.
 - **CSRF:** token on every mutating endpoint (same-site cookies are not treated
@@ -247,14 +250,17 @@ photo share:
 ### Packaging
 - Built in a Debian 11 Bullseye Docker container in CI, following the
   jessedp/WD-NAS-App-Builder template (actively maintained, tested on PR4100).
-- Everything statically linked; zero reliance on NAS system libraries.
+- Linking per section 2b: FULLY STATIC preferred; otherwise fully bundled
+  (every shared lib inside the package, rpath=$ORIGIN); host reliance limited
+  to what OS5 (Bullseye) guarantees.
 - **Install path (primary, by user decision): dashboard only.** The owner installs
   the `.bin` via the OS 5 web dashboard (Settings → Apps → Install an app manually).
   SSH is NOT part of the normal flow - development, CI and on-device testing all work
   without it (the owner installs test builds himself). If SSH access is ever needed,
   it will be requested explicitly with the exact reason, and credentials only via a
   vault link, never in chat.
-- Uninstall removes binaries; the face DB is kept (with a "remove data too" option).
+- Uninstall removes binaries; the face DB, settings and reports share are kept
+  (explicit "remove data too" option deletes all three) - see 2c.
 
 ### Metadata write-back (XMP) — opt-in
 Once a cluster is named, the app can record the name in standard photo metadata so it
