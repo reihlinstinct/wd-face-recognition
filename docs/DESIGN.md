@@ -1,7 +1,7 @@
 # WD Face Recognition — Design Doc
 **On-device face recognition for WD My Cloud PR4100, packaged as a native My Cloud OS 5 app**
 
-Status: draft v0.26 · 2026-10-27 · Owner: the owner
+Status: draft v0.27 · 2026-10-27 · Owner: the owner
 
 ---
 
@@ -260,12 +260,14 @@ survives outside the app (Lightroom/digiKam/Photos-compatible):
        all-or-nothing). The owner adds packs for the regions the family has
        been to; detail level per pack is selectable (max zoom). Storage is
        limited only by his disks.
-     - **Getting packs, two ways, both explicit:** (a) upload an mbtiles file
-       through the web UI (he downloads it wherever he likes and supplies the
-       file - the app stays 100% no-outbound); (b) a one-time download he
-       explicitly triggers in the UI (shows source URL + size, asks
-       confirmation) - outbound is OFF by default and this is the single
-       owner-initiated exception, never background traffic.
+     - **Getting packs: upload only.** The owner supplies mbtiles files through
+       the web UI (he downloads them wherever he likes, on any device, and
+       uploads). The app has NO download path - "no outbound, ever" stays true
+       everywhere (privacy rules, SECURITY.md, and the CI no-outbound test).
+     - **Uploaded mbtiles = untrusted input:** schema/validity check (must be a
+       well-formed MVT mbtiles), size limit, opened READ-ONLY, and the upload
+       endpoint requires auth + CSRF token. Rejected files are deleted, not
+       kept.
      - Sizes per region are estimates, validated in milestone 5.
   Written to the sidecar XMP (GPS coordinates + IPTC/XMP location text fields)
   when write-back is on; originals never touched.
@@ -331,10 +333,15 @@ same photo library (e.g. a backup NAS), and let it attach the data to its copies
   writing anything; undoable via the activity log (purge rules still apply).
 - Fully offline: bundles move via the UI download/upload or a share; no
   outbound calls.
+- **Imported bundle = untrusted input:** schema version check, strict field
+  validation, size limit, parsed read-only in a sandboxed reader; the upload
+  endpoint requires auth + CSRF token. A malformed bundle fails the dry-run
+  with a clear error - it never reaches the DB.
 
 ### Privacy (hard requirements)
-- All processing local; the app makes no outbound network connections (enforced in
-  code review; the UI bundles every asset).
+- All processing local; the app makes NO outbound network connections, ever -
+  no exceptions (map packs and face-data bundles are upload-only). Enforced by
+  the CI no-outbound test; the UI bundles every asset.
 - Repo and CI contain **synthetic faces only** (generated/test-pattern images).
   No real photos, no real embeddings, no personal data in git history.
 - **Embeddings are biometric data:** the face DB lives in the app data dir with

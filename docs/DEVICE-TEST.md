@@ -11,7 +11,8 @@ results come back as one report file.
 1. Download the `.bin` artifact from the CI run / release page.
 2. PR4100 dashboard -> **Apps** -> **Install an app manually** -> pick the `.bin`.
 3. Confirm the app appears in the Apps list as **facerecog** and shows *Running*.
-4. Open the app page: `http://<nas-ip>:8088/` from the LAN - the status page must load.
+4. Open the app page: `http://<nas-ip>:8088/` from the LAN - the FIRST-RUN setup/login
+   screen must load (password creation), not a status page.
 5. **Stop** the app from the dashboard, confirm the page stops answering; **Start** again.
 6. **Remove** the app; confirm it disappears from the Apps list. The face DB and
    reports share are kept by design (only "remove data too" deletes them).
