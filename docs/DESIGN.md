@@ -1,7 +1,7 @@
 # WD Face Recognition — Design Doc
 **On-device face recognition for WD My Cloud PR4100, packaged as a native My Cloud OS 5 app**
 
-Status: draft v0.27 · 2026-10-27 · Owner: the owner
+Status: draft v0.38 · 2026-10-27 · Owner: the owner
 
 ---
 
@@ -11,7 +11,7 @@ A WD My Cloud OS 5 app for the PR4100 that scans **all photos on the device**,
 detects faces, clusters similar faces into people, and serves a web page on the NAS
 where the owner names each cluster — then can optionally write the person's name into
 the photo's XMP metadata (section 4.3). **100% on-device**: no cloud calls, no
-telemetry, no photos or embeddings ever leave the box. Installable the way any WD app
+telemetry, and nothing is sent anywhere by the app itself. Installable the way any WD app
 is installed: Settings → Apps → Install an app manually.
 
 ## 2. Target hardware and OS (grounded - see Sources)
@@ -21,7 +21,7 @@ is installed: Settings → Apps → Install an app manually.
 | CPU | Intel Pentium N3710, 4 cores / 4 threads, 1.6 GHz (burst 2.56 GHz), Braswell (Airmont), 14 nm, 6 W TDP | Intel ARK; WD product spec sheet |
 | ISA ceiling | SSE4.2 — **no AVX/AVX2** (Airmont core) | Intel ARK (Instruction Set Extensions) |
 | RAM | 4 GB DDR3L (2×2 GB), upgradeable to 16 GB | WD support / spec sheet |
-| OS | My Cloud OS 5 — stripped Debian 11 (Bullseye), x86_64, no package manager, outdated system libraries | jessedp/WD-NAS-App-Builder |
+| OS | My Cloud OS 5 — stripped Debian 11 (Bullseye), x86_64, no package manager, outdated system libraries. Target = LATEST OS5 (owner's device is up to date; latest grounded release: firmware 5.33.102, 2026-03-24 - re-check before each release) | jessedp/WD-NAS-App-Builder; WD release notes |
 | App format | `.bin` apkg bundle: `apkg.rc` + lifecycle scripts (`install.sh`, `init.sh`, `start.sh`, `stop.sh`, `remove.sh`), installed via the web dashboard, no SSH needed | WD NAS App Builder template |
 | Build env | Debian 11 (Bullseye) Docker container to match the NAS; binaries must be statically linked or bundled | WD NAS App Builder |
 | Official SDK | WD's developer portal/SDK appears discontinued; community packaging conventions are the de-facto standard | community.wd.com threads |
@@ -34,6 +34,96 @@ device in milestones 1-3 before we rely on them.
 InsightFace stack (heavy RAM, prebuilt wheels tuned for AVX). The inference engine must
 work well on SSE4.2-only silicon.
 
+## 2c. Installation-simplicity principle (owner rule, 2026-10-27)
+
+Installing and living with the app must be simple for a non-technical owner:
+
+- **One self-contained `.bin`** installed from the WD dashboard (Apps ->
+  Install an app manually). No SSH, no CLI, no extra packages, no runtime
+  downloads (see 2b).
+- **First-run wizard** (part of the first-run claim in the access-control
+  section): 1) create the password, 2) choose folders to scan (default:
+  nothing), 3) done - scanning starts on schedule. Sensible defaults for
+  everything else; advanced settings available but never required.
+- **Upgrade path:** install the new `.bin` over the old via the dashboard;
+  data (DB, names, sidecars, settings) is kept; schema migrations run
+  automatically and are tested in CI.
+- **Uninstall path / retention contract:** dashboard remove keeps BOTH the
+  face DB and the reports share (and the owner's settings), so an
+  uninstall/reinstall cycle loses nothing; the explicit "remove data too"
+  option deletes all three. Verified on-device in DEVICE-TEST.
+- **The DEVICE-TEST run sheet covers exactly this flow** (install / first-run
+  wizard / start / stop / upgrade / remove) so simplicity is verified on the
+  real device, not assumed.
+
+## 2b. Dependency-minimalism principle (owner rule, 2026-10-27)
+
+Minimize libraries that are not already on the device:
+
+- **Nothing is fetched at runtime, ever.** The `.bin` carries everything the
+  app needs; the device may be offline and stays that way.
+- **Prefer what OS5 already ships** where its version is usable; bundle only
+  what the OS lacks or versions too old to trust.
+- **Minimal static set, each one justified:** every bundled library needs a
+  line in `DEPENDENCIES.md`: name, pinned version + source, licence, why it is
+  needed, unpacked size, and the audit note (known-CVE check at pin time +
+  Dependabot/renovate tracking after). No transitive bloat: a dependency that
+  pulls a tree needs extra justification.
+- **Current bundle under review (must each earn its place):**
+  - ncnn - inference runtime. NEEDED (no smaller maintained option for SCRFD
+    + MobileFaceNet on SSE4.2).
+  - Exiv2 - XMP read/write. NEEDED (XMP correctness by hand is error-prone);
+    evaluate trimming to metadata-only build.
+  - libjpeg-turbo - JPEG decode. NEEDED; check if the OS's libjpeg is usable
+    first, bundle only if not.
+  - SQLite (C amalgamation) - index DB. NEEDED, tiny.
+  - Rust web stack (axum/tokio or smaller) - REVIEW: pick the smallest HTTP
+    stack that serves the UI; a micro-framework beats a full async stack if it
+    meets the API shape.
+  - MapLibre GL (UI bundle) - NEEDED for the pin-drop map; assets bundled, no
+    CDN.
+  - age/XChaCha20 crypto for bundle encryption - NEEDED only for M8; small,
+    audited crate.
+  - GeoNames gazetteer data - data, not code; sized in M2.
+- Adding ANY new dependency requires naming it in the PR body with its
+  justification; CI fails on an undeclared addition (lockfile diff check).
+- **Baseline verified from real data:** the on-device self-test records the
+  exact firmware version, kernel, glibc version, CPU flags (`/proc/cpuinfo`),
+  RAM and installed system libraries (see DEVICE-TEST) - the Bullseye/static
+  assumptions are confirmed or corrected from THAT data, not guessed.
+- **Robustness against host drift (owner rule):** a library must never
+  suddenly need something the device lacks. Binaries are FULLY STATIC
+  (preferred) or FULLY BUNDLED - every shared lib shipped inside the app with
+  `rpath=$ORIGIN`, relying on host glibc/system libs only within what OS5
+  (Bullseye) guarantees; builds happen in the Bullseye container so the ABI
+  baseline matches the device. All versions pinned. **CI gate:** `readelf -d` /
+  `ldd` on every shipped binary, failed if a needed library is not in an
+  explicit allowlist (or not resolved inside the package). **On-device
+  self-check:** at startup the app verifies its own linkage and reports any
+  missing library/symbol in clear language on the setup screen (and in the
+  self-test report) instead of dying silently.
+
+## 2a. Performance-first principle (owner rule for ALL contributors)
+
+The target is a weak device (N3710, 4 GB). Efficiency is a feature, and it is
+every contributor's job (Instinct, Claude, Tab):
+
+- **Budgets per component** (validated in M2, enforced in CI): indexer worker
+  <= 1.5 GB RSS and <= 80% CPU under load; web UI backend <= 256 MB RSS idle;
+  app startup to ready <= 30 s on-device; UI pages <= 1 MB initial payload
+  (map/tile views included - tiles stream, no bulk prefetch).
+- **Lightweight models only:** the smallest model that meets the accuracy bar
+  (SCRFD-0.5GF class detector, MobileFaceNet-class recognizer), quantized
+  (int8) where accuracy holds; any model upgrade must re-justify its budget.
+- **Bounded everything:** streaming everywhere (ZIP export, tile serving, image
+  decode), fixed-size queues, no whole-library structures in RAM; incremental
+  scanning by mtime delta, never a blind full re-walk.
+- **I/O discipline:** batched SQLite writes, WAL, read-ahead-friendly sequential
+  file access, ionice idle class.
+- **Regression gates:** CI runs the benchmark suite with THRESHOLDS - a PR that
+  regresses latency, RSS or payload beyond the budget fails CI. The on-device
+  self-test remains the final authority.
+
 ## 3. Feasibility verdict
 
 **Feasible — as a background batch indexer, not a realtime service.**
@@ -41,6 +131,12 @@ work well on SSE4.2-only silicon.
 - Detection: SCRFD-0.5GF / 2.5GF (InsightFace's lightweight detector family).
 - Recognition: MobileFaceNet-class ArcFace model (≤ 4 MB, ~1M params, 99.5% LFW),
   e.g. the `w600k_mbf`/`buffalo_sc` recognition model.
+- **Model provenance (required before packaging):** family names are not
+  artifacts. M2 must pin the EXACT weight files in DEPENDENCIES.md: source URL,
+  revision, SHA-256 checksum, input shape, measured size, and the
+  redistribution licence (verified, not assumed - some published face-model
+  weights carry non-commercial terms; if the chosen weights do, they are
+  replaced before any packaging).
 - Runtime: **ncnn** (Tencent) — the best fit for SSE4.2-only low-end x86; small,
   dependency-free, statically linkable. OpenCV DNN is the fallback.
 - Expected throughput on the N3710 (estimate, to be validated in milestone 2):
@@ -87,13 +183,21 @@ is not enough:
 - **Authentication required for everything** (viewing included). v1: app-local
   login (owner-set password, argon2-hashed), session cookie (HttpOnly,
   SameSite=Strict, Secure when served over HTTPS). No anonymous mode.
-- **First-run claim:** on first launch the UI demands password creation before
-  anything else works - until then every route shows only the setup screen, so
-  nobody else on the LAN can claim the app first.
-- **Transport:** default is plain HTTP on :8088 - documented risk: the password
-  crosses the LAN in cleartext. The app therefore offers a self-signed HTTPS
-  option (cert generated on-device at setup, owner accepts the browser warning
-  once); recommended when the LAN isn't fully trusted.
+- **First-run claim, owner-bound:** on first launch the UI demands password
+  creation before anything else works - until then every route shows only the
+  setup screen. Enrollment additionally requires proof of being the NAS owner:
+  the wizard asks for the WD dashboard ADMIN credentials (validated LOCALLY
+  against the OS on the box, never stored) - a random LAN device cannot enroll.
+  (Fallback if OS-credential validation proves unavailable on OS5: a one-time
+  setup token written to a path readable only via the authenticated WD
+  dashboard file manager.)
+- **Transport: HTTPS by default.** The app generates a self-signed certificate
+  at install and serves :8443; its SHA-256 fingerprint is shown on the setup
+  screen so the owner can verify it against the browser warning (the warning
+  alone is NOT authentication - the fingerprint check is). Plain HTTP on :8088
+  is a fallback the owner must explicitly enable, with a warning that
+  credentials cross the LAN in cleartext; it is refused during first-run
+  enrollment unless the owner confirms the LAN is trusted.
 - **Bind address:** localhost + the NAS LAN interface only; never exposed to the
   internet by the app itself. No UPnP/NAT traversal.
 - **CSRF:** token on every mutating endpoint (same-site cookies are not treated
@@ -172,9 +276,12 @@ survives outside the app (Lightroom/digiKam/Photos-compatible):
      for darktable users. If a sidecar already exists, the app MERGES (adds its fields,
      preserves everything else) instead of overwriting.
 - **Edge-case rules:**
-  - RAW+JPEG pairs (`IMG_1234.CR2` + `IMG_1234.JPG`) collide on `IMG_1234.xmp`:
-    when both exist, the app writes the full-filename form for both
-    (`IMG_1234.CR2.xmp`, `IMG_1234.JPG.xmp`); single-file basenames use `photo.xmp`.
+  - Same-stem collisions: ANY distinct files sharing a basename
+    (`IMG_1234.CR2`+`IMG_1234.JPG`, but also `.CR2`+`.DNG`, `.JPG`+`.TIF`,
+    case variants) collide on `photo.xmp`. Rule: whenever a basename maps to
+    more than one distinct file, the app writes the full-filename form
+    (`IMG_1234.CR2.xmp`, ...) for each of them; collision-free basenames use
+    `photo.xmp`. Detection is by directory listing at write time.
   - An existing sidecar that fails to parse is NEVER overwritten or "fixed": the
     file is skipped, logged, and surfaced in the UI for the owner to decide.
   - Writes are atomic: temp file + fsync + rename; a crash mid-write cannot leave
@@ -297,6 +404,11 @@ survives outside the app (Lightroom/digiKam/Photos-compatible):
   (merge, split, ignore, purge, reassign) updates the affected photos' sidecars so
   names outside the app always match the DB. Purged/ignored people are removed
   from sidecars on the next write pass.
+- **Purge durability:** a purge writes a durable PURGE MANIFEST (affected photos
+  + fields to strip) BEFORE deleting any records; the sidecar cleanup worker
+  processes the manifest and only then are the DB records deleted; the manifest
+  survives restarts and is retired only when every cleanup write has succeeded.
+  A crash mid-purge therefore cannot strand stale names in sidecars.
 
 **Name format:**
 - Free-text display name, Unicode-safe end to end (Hebrew names in the DB, the UI
@@ -317,12 +429,14 @@ same photo library (e.g. a backup NAS), and let it attach the data to its copies
   smallest/safest bundle; on when the target should skip re-recognition);
   per photo: content hash, EXIF date, GPS/manual locations. No photo pixels,
   no thumbnails.
-- **Encryption:** optional passphrase encryption (e.g. age/XChaCha20-Poly1305)
-  - recommended ON, this is biometric data; bundle permissions 600.
+- **Encryption: REQUIRED on export** (age/XChaCha20-Poly1305, owner passphrase)
+  for every bundle - this is biometric data and file permissions (600) protect
+  only the NAS copy, not a downloaded one. The import side accepts only
+  encrypted bundles.
 - **Matching on import:** primary key is the photo's **content hash**
   (SHA-256 of the file) - robust to renames and moves. Fallback: perceptual
-  hash (pHash) for re-encoded/resized copies - always clearly LABELLED as
-  approximate and shown for confirmation before attaching.
+  hash (pHash) for re-encoded/resized copies - clearly LABELLED approximate and
+  NEVER auto-attached: every pHash match waits for owner confirmation.
 - **Pending records:** faces whose photo is not (yet) on the target stay in a
   pending queue; they attach automatically when a matching photo appears in a
   later scan.
@@ -334,14 +448,21 @@ same photo library (e.g. a backup NAS), and let it attach the data to its copies
 - Fully offline: bundles move via the UI download/upload or a share; no
   outbound calls.
 - **Imported bundle = untrusted input:** schema version check, strict field
-  validation, size limit, parsed read-only in a sandboxed reader; the upload
-  endpoint requires auth + CSRF token. A malformed bundle fails the dry-run
-  with a clear error - it never reaches the DB.
+  validation, size limits (compressed AND decompressed size, plus entry-count
+  caps), parsed read-only in a sandboxed reader; the upload endpoint requires
+  auth + CSRF token. A malformed bundle fails the dry-run with a clear error -
+  it never reaches the DB. Export/download endpoints carry the same auth + CSRF
+  requirements.
 
 ### Privacy (hard requirements)
 - All processing local; the app makes NO outbound network connections, ever -
   no exceptions (map packs and face-data bundles are upload-only). Enforced by
   the CI no-outbound test; the UI bundles every asset.
+- **Owner-authorized exports are the only way data leaves the box, and they are
+  the owner's own act, not app exfiltration:** photo downloads (M7) and
+  face-data bundles (M8) move only through the authenticated UI (auth + CSRF),
+  are logged in the activity log, and bundles are passphrase-encrypted (see
+  below). The app never transmits anything on its own.
 - Repo and CI contain **synthetic faces only** (generated/test-pattern images).
   No real photos, no real embeddings, no personal data in git history.
 - **Embeddings are biometric data:** the face DB lives in the app data dir with
@@ -349,7 +470,10 @@ same photo library (e.g. a backup NAS), and let it attach the data to its copies
   **wipe** option (delete ALL app data - faces AND stored locations - keep
   photos); CI includes a no-outbound check (test asserting the app opens no
   external network connections). SQLite runs with secure_delete=ON and the app
-  VACUUMs after purge/wipe so deleted embeddings are really gone. The activity
+  VACUUMs after purge/wipe to remove deleted embeddings FROM SQLITE STORAGE;
+  face thumbnails, WAL/journal and temp files are deleted separately
+  (overwrite-then-delete where the filesystem allows); NAS snapshots and RAID
+  replicas are outside the app's reach and documented as such. The activity
   log and the self-test report contain NO person names and NO biometric data -
   IDs, counts and timings only.
 - Public repo by default, after a private-data scan, per standing convention.
@@ -366,10 +490,126 @@ same photo library (e.g. a backup NAS), and let it attach the data to its copies
 - Web UI gets the full site treatment: favicon, security headers/CSP,
   accessibility, mobile version, e2e tests (Chrome + WebKit), security.txt.
 
+## 5a. ADR-001: Implementation language
+
+**Status: ACCEPTED (provisional, 2026-10-27, owner-approved after
+clarification) - C++ native worker + Rust service layer. Go was evaluated
+and DROPPED by the owner ("forget Go"; the inference libraries force FFI
+anyway, so Go's static-build advantage doesn't pay off here - see g2).
+Confirmed or revised by the M2 benchmark results (#3) and the language
+shootout (#14).**
+
+Context: N3710 (4C/4T, SSE4.2, no AVX), 4 GB RAM, OS5 = stripped Debian 11,
+apps ship as self-contained packages. Question raised by the owner: "maybe C or
+C++ would be more right". Honest evaluation per layer. All numbers marked
+(est.) are estimates until M2 measures them.
+
+**(a) Inference runtime:** the heavy math lives in ncnn (C++) regardless of the
+app language - Python/Go/Rust would all bind into the same C++ core. Language
+choice changes ORCHESTRATION overhead only, which is small next to inference
+time. No winner here; this layer is C++ by necessity.
+
+**(b) Indexer / scanner / hashing / EXIF / XMP:** Exiv2 and libjpeg-turbo are
+C/C++; pHash and SHA-256 are native in any language. Python is the worst fit:
+interpreter baseline ~30-60 MB RSS (est.) before any work, slow startup, and
+the GIL fights multi-threaded pipelines. C++ is native here; Rust and Go bind
+via FFI with thin overhead.
+
+**(c) Web backend:** Go: single static binary, excellent stdlib HTTP, trivial
+cross-compile - but CGO_ENABLED=0 static builds conflict with FFI to ncnn/Exiv2
+(cgo needed), and musl+cgo static linking is painful. Rust (axum): smallest
+RSS (est. 5-20 MB), no GC, same FFI caveat but the ecosystem handles it.
+C++ embedded HTTP (crow/drogon): fewest moving parts in one binary, highest
+defect risk and dev effort. Python (FastAPI): easiest to write, worst RSS
+(est. 100+ MB with deps) and slowest startup against the 30 s budget.
+
+**(d) OS5 packaging:** the convention is statically linked binaries built in
+the Bullseye container. C++ links ncnn/Exiv2 directly - the natural fit.
+Rust-musl static is well-trodden. Go static is trivial ONLY without cgo.
+Python needs a bundled interpreter (PyInstaller-style) - biggest artifact,
+most fragile.
+
+**(e) Memory/startup:** C++ ~ Rust (few MB RSS, ms startup) > Go (runtime +
+GC, est. 15-50 MB) >> Python (est. 60-150 MB with libs).
+
+**(f) Safety on untrusted input:** the app parses owner-supplied mbtiles,
+face-data bundles, existing sidecars - and ordinary photos, which are also
+untrusted bytes (malformed JPEG/XMP is a classic CVE vector in C libraries).
+Rust's memory safety is the strongest answer for the parsers we WRITE. But
+the C libraries we must use (ncnn, Exiv2, libjpeg-turbo) stay C/C++ in every
+option - so the real control is ISOLATION: the worker that touches photo
+bytes runs sandboxed (seccomp filter, rlimits, no network namespace,
+read-only mounts) whatever language wraps it.
+
+**(g2) Go explicitly (owner asked "maybe Go, if it's supported"):**
+Platform support: YES - Go targets linux/amd64, which the PR4100 (x86_64, OS5)
+runs; a Go toolchain package for OS5 even exists in the community builder repo
+(listed as untested, but that's the toolchain, not the runtime - compiled Go
+binaries need no runtime). Static binaries are Go's signature feature:
+`CGO_ENABLED=0 go build` yields a fully static, dependency-free binary - the
+easiest packaging story of all candidates.
+The catches for THIS app:
+- **Face inference has no pure-Go path:** ncnn and ONNX Runtime are C/C++;
+  their Go bindings (onnxruntime_go, gocv/OpenCV) all need cgo, and cgo
+  reintroduces exactly the static-linking pain (musl+cgo) that Go otherwise
+  avoids.
+- **SQLite:** fine - modernc.org/sqlite is pure Go (no cgo); mattn/go-sqlite3
+  needs cgo but is avoidable.
+- **GC on 4 GB:** manageable - GOMEMLIMIT/GOGC tuning keeps RSS in budget
+  (est. 15-50 MB typical for this workload), but it's one more thing to tune
+  that Rust/C++ don't have.
+Verdict: Go is SUPPORTED on the platform, but since the inference core
+forces cgo anyway, Go's main advantage (painless static builds) is partly
+lost - **the owner dropped Go (2026-10-27): no fallback, no Go deliverable.
+It appears in the #14 shootout only if keeping it as a reference row is
+trivial.**
+
+**(g) Maintainability (Instinct/Claude/Tab):** Python > Go > Rust > C++ for
+iteration speed. The codebase is small; AI contributors handle Rust/C++ fine,
+but C++ debug cycles are the slowest.
+
+**Recommendation (draft):** split by concern -
+1. **Native C++ worker** for the hot paths (decode/detect/embed/hash/EXIF),
+   statically linked against ncnn/Exiv2/libjpeg-turbo, built in the Bullseye
+   container, run as a sandboxed subprocess. This is also the packaging
+   convention's home turf.
+2. **Rust service layer** for everything else: web backend, UI API, DB
+   orchestration, and ALL parsers we write ourselves (mbtiles, bundle, XMP
+   merge logic) - memory safety exactly where untrusted input enters, tiny
+   RSS, static musl build.
+3. **Python ruled out for on-device daemons** (RSS/startup budgets); still
+   fine for CI tooling and test harnesses.
+Fallback: if the two-language build proves too costly in M1, collapse the
+service layer into the C++ worker with an embedded HTTP server and accept
+the extra review burden - not the reverse (no Python/Go service on-device).
+
+**What M2 settles:** whether the sandboxed-worker overhead and FFI boundaries
+cost anything measurable; whether int8 ncnn meets the latency budget; actual
+RSS per component vs the 2a budgets. Language choice does NOT change
+inference speed materially - it changes RSS, startup, packaging and safety.
+
+**Language shootout (owner: "run tests to find what is most efficient"):**
+same small workloads implemented in C++, Rust and Python (Go only as a
+trivial-to-keep reference row, per owner):
+1. SHA-256 hashing of a 12 MP file stream
+2. EXIF/XMP parse of a synthetic JPEG
+3. JPEG decode (libjpeg-turbo path each language would really use)
+4. HTTP + JSON request handling (the UI API shape)
+5. SQLite batch writes (modernc/pure where applicable)
+6. ncnn inference call overhead (FFI cost per call, tiny model)
+Measured per runtime: RSS (peak/idle), cold startup, throughput - inside the
+Bullseye container with AVX DISABLED and cgroup limits (4 GB RAM, 2 cores) to
+approximate the device. Synthetic data only. All results LABELLED as container
+estimates; the on-device self-test run (DEVICE-TEST) is the final authority.
+Runs in GitHub Actions (free for this public repo).
+
 ## 6. Milestones
 
 1. **Bootstrap** — repo, this design doc, skeleton apkg ("hello world" installable
-   `.bin` built by CI), issue #1.
+   `.bin` built by CI), issue #1. Toolchain per ADR-001 (accepted provisional):
+   C++ worker + Rust service, both STATIC builds inside the Debian 11
+   (Bullseye) container (Rust via musl target); CI produces both binaries +
+   the `.bin` package.
 2. **Benchmark spike** — ncnn + SCRFD + MobileFaceNet built WITHOUT AVX code
    paths (baseline x86-64, AVX dispatch disabled) so container numbers are not
    inflated by host AVX; measure per-photo latency INCLUDING image decode
@@ -418,6 +658,7 @@ Hardware / OS:
 
 App packaging (community):
 - WD NAS App Builder (apkg template, Bullseye build, PR4100-tested): https://github.com/jessedp/WD-NAS-App-Builder
+- OS5 release notes (live): https://os5releasenotes.mycloud.com/ ; firmware 5.33.102 announcement: https://community.wd.com/t/my-cloud-os-5-firmware-release-note-5-33-102/476697 ; OS5-supported models: https://support-en.wd.com/app/answers/detailweb/a_id/29230/
 - OS5 SDK status threads: https://community.wd.com/t/where-can-i-find-documentation-for-the-os5-api-or-an-sdk/278796 , https://community.wd.com/t/photo-index-db/298167 , https://community.wd.com/t/hide-pictures-or-videos-in-os-5-my-cloud-app/259853
 
 ML stack:
