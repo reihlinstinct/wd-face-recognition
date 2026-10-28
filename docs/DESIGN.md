@@ -397,6 +397,9 @@ survives outside the app (Lightroom/digiKam/Photos-compatible):
   when write-back is on; originals never touched.
 - People page shows one card per cluster with a grid of sample faces (largest /
   sharpest first), face count and a photo count.
+  (0.3.0 status: list page with cover crop, name and face count, rename and
+  merge actions, and a per-person page with every face in-page are
+  implemented; split/ignore/purge and sample-grid ordering are still open.)
 - Tap a card -> name field with autocomplete from existing names (typing "דוד"
   or "david" both match the same person); confirm assigns the name to the cluster.
 - Cluster hygiene actions on every card: **merge** (two clusters are the same
