@@ -105,6 +105,16 @@ cur.execute("INSERT INTO clusters(name) VALUES('Old')")
 old_id = cur.lastrowid
 cur.execute("INSERT INTO clusters(name) VALUES('Keep')")
 keep_id = cur.lastrowid
+# One face attached to old_id, so the merge must move it (CodeRabbit #76).
+cur.execute(
+    "INSERT INTO photos(root, path, size, mtime, state, detector_ver,"
+    " embedder_ver) VALUES(?, ?, 8, 1000, 'done', 't', 't')",
+    (tmp, os.path.join(tmp, "seed.jpg")))
+photo_id = cur.lastrowid
+cur.execute(
+    "INSERT INTO faces(photo_id, bbox, embedding, crop_path, cluster_id)"
+    " VALUES(?, '0,0,1,1', x'00000000', 'crops/seed.jpg', ?)",
+    (photo_id, old_id))
 db.commit()
 db.close()
 
@@ -125,11 +135,18 @@ people = json.loads(r.stdout) if r.returncode == 0 else []
 check(all(p["id"] != old_id for p in people), "merged-away person is gone")
 kept = [p for p in people if p["id"] == keep_id]
 check(kept and kept[0]["name"] == "Keep", "named merge target keeps its name")
+check(kept[0]["faces"] == 1, "merge moved the face to the target")
+r = run("person", "--config", conf, "--id", str(keep_id))
+person = json.loads(r.stdout) if r.returncode == 0 else {}
+check(person.get("faces") and person["faces"][0]["crop"] == "crops/seed.jpg",
+      "moved face listed under the target person")
 
-# cluster on the empty index prints the counts line.
+# cluster over the seeded index prints the counts line: the one face is
+# a singleton group (its 4-byte embedding is below the dimension guard's
+# comparable peers - there are none - so it stands alone).
 r = run("cluster", "--config", conf)
 check(r.returncode == 0 and r.stdout.strip() ==
-      "faces=0 people=0 singletons=0", "cluster counts line")
+      "faces=1 people=1 singletons=1", "cluster counts line")
 
 if fails:
     print(f"test_faces_cli: {fails} FAILURES", file=sys.stderr)
