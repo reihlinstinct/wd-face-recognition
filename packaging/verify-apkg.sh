@@ -91,7 +91,7 @@ esac
 ok "apkg.rc fields sane (Version ${HDR_VERSION}, MinFWVer $(rc_val MinFWVer), icon ${ICON})"
 
 # --- 5. expected payload contents -------------------------------------------
-for f in bin/wdf_demo models/scrfd_500m.param models/scrfd_500m.bin models/mobilefacenet.param models/mobilefacenet.bin; do
+for f in bin/wdf_demo bin/wdf_faces models/scrfd_500m.param models/scrfd_500m.bin models/mobilefacenet.param models/mobilefacenet.bin; do
 	[ -f "${PKG_DIR}/${f}" ] || fail "payload missing ${f}"
 done
 demo_out="$("${PKG_DIR}/bin/wdf_demo" --version 2>&1)" \
@@ -100,7 +100,13 @@ case "${demo_out}" in
 	wdf_demo\ *) ;;
 	*) fail "wdf_demo --version output unexpected: ${demo_out}" ;;
 esac
-ok "payload contents + wdf_demo smoke-run"
+faces_out="$("${PKG_DIR}/bin/wdf_faces" --version 2>&1)" \
+	|| fail "wdf_faces --version failed to execute (output: ${faces_out:-none})"
+case "${faces_out}" in
+	wdf_faces\ *) ;;
+	*) fail "wdf_faces --version output unexpected: ${faces_out}" ;;
+esac
+ok "payload contents + wdf_demo/wdf_faces smoke-run"
 
 # --- 6. signature ------------------------------------------------------------
 SIGN="${PKG_DIR}/apkg.sign"

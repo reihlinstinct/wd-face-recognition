@@ -87,9 +87,21 @@ cp "${REPO_ROOT}/build/models/scrfd_500m.param" \
 	"${REPO_ROOT}/build/models/mobilefacenet.bin" \
 	"${REPO_ROOT}/apkg/models/"
 
+log "2c/4 faces daemon (wdf_faces, static, issue #56)"
+# SQLite comes from the pinned amalgamation compiled into the target, so
+# only ncnn + libjpeg are external - the same static recipe as wdf_demo.
+"${REPO_ROOT}/indexer/get-sqlite.sh"
+cmake -S "${REPO_ROOT}/indexer" -B "${REPO_ROOT}/build/faces" \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DNCNN_INSTALL_DIR="${NCNN_BUILD:-/tmp/ncnn-build}/install" \
+	-DWDF_FACES_STATIC=ON
+cmake --build "${REPO_ROOT}/build/faces" --parallel
+check_static "${REPO_ROOT}/build/faces/wdf_faces"
+
 log "3/4 staging binaries into apkg/bin"
 mkdir -p "${STAGE_BIN}"
 cp "${REPO_ROOT}/build/demo/wdf_demo" "${STAGE_BIN}/"
+cp "${REPO_ROOT}/build/faces/wdf_faces" "${STAGE_BIN}/"
 cp "${WORKER_BUILD}/wdf-worker" "${STAGE_BIN}/"
 cp "${SERVICE_TARGET_DIR}/x86_64-unknown-linux-musl/release/wdf-service" "${STAGE_BIN}/"
 

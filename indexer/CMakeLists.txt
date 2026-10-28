@@ -20,6 +20,13 @@ target_link_libraries(wdf_indexer PRIVATE sqlite3 pthread dl)
 # off by default - CI's plain-g++ indexer job and the NAS-less local build
 # stay dependency-free.
 option(WDF_FACES "Build wdf_faces (needs ncnn + libjpeg)" OFF)
+# Fully static link for the NAS package (issue #56), mirroring the demo:
+# no library assumptions on the PR4100. Implies WDF_FACES.
+option(WDF_FACES_STATIC "Link wdf_faces fully statically for the apkg" OFF)
+if(WDF_FACES_STATIC)
+    set(WDF_FACES ON)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+endif()
 if(WDF_FACES)
     find_package(ncnn REQUIRED PATHS ${NCNN_INSTALL_DIR}/lib/cmake/ncnn NO_DEFAULT_PATH)
     find_package(OpenMP REQUIRED)
@@ -33,6 +40,12 @@ if(WDF_FACES)
         ${WDF_PIPELINE_DIR}/jpegio.cpp)
     target_include_directories(wdf_faces PRIVATE ${WDF_PIPELINE_DIR} ${JPEG_INCLUDE_DIR})
     target_link_libraries(wdf_faces PRIVATE sqlite3 ncnn ${JPEG_LIBRARY} OpenMP::OpenMP_CXX pthread dl)
+    if(WDF_FACES_STATIC)
+        # Same libgomp/-ldl ordering trap as the demo: name gomp
+        # explicitly so dl and pthread land after it.
+        target_link_libraries(wdf_faces PRIVATE gomp dl pthread)
+        target_link_options(wdf_faces PRIVATE -static)
+    endif()
 endif()
 
 option(WDF_INDEXER_TESTS "Build the indexer unit tests" OFF)

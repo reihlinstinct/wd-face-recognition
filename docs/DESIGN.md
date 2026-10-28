@@ -288,6 +288,11 @@ photo share:
 ### Packaging
 - Built in a Debian 11 Bullseye Docker container in CI, following the
   jessedp/WD-NAS-App-Builder template (actively maintained, tested on PR4100).
+- Binaries staged into apkg/bin (issue #56): wdf-worker, wdf-service,
+  wdf_demo, and wdf_faces (the people pages' CLI backend, fully static
+  like wdf_demo; SQLite comes from the pinned amalgamation compiled
+  in, so only ncnn + libjpeg are external). wdf_indexer joins when the
+  daemon side of #40 lands.
 - Linking per section 2b: FULLY STATIC preferred; otherwise fully bundled
   (every shared lib inside the package, rpath=$ORIGIN); host reliance limited
   to what OS5 (Bullseye) guarantees.
