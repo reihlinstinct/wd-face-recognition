@@ -28,7 +28,7 @@ jobs:
             build-essential ca-certificates cmake curl file git unzip pkg-config \
             libjpeg62-turbo-dev protobuf-compiler libprotobuf-dev python3 python3-pip
       # Checkout after git is installed: debian:11 has no git by default.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -43,7 +43,7 @@ jobs:
         run: python3 -m pip install --no-cache-dir onnx-simplifier==0.4.36
 
       - name: Cache the ncnn build
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/ncnn-build
           key: ncnn-20261020-noavx-v2
@@ -57,7 +57,7 @@ jobs:
         run: packaging/verify-apkg.sh
 
       - name: Upload the apkg package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wd-face-recognition-apkg
           path: packages/*.bin

@@ -29,7 +29,7 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential ca-certificates cmake curl git unzip pkg-config \
             libjpeg62-turbo-dev protobuf-compiler libprotobuf-dev python3 python3-pip
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -37,7 +37,7 @@ jobs:
         run: python3 -m pip install --no-cache-dir pillow onnx-simplifier==0.4.36 pnnx==20261020
 
       - name: Cache the ncnn build
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/ncnn-build
           key: ncnn-20261020-noavx-v2
@@ -108,7 +108,7 @@ jobs:
       - name: Upload demo logs
         # Privacy (issue #55): never upload image output - the demo crops
         # are face images. Logs and metadata only.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wdf-demo-logs
           path: |
