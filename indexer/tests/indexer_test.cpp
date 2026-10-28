@@ -2,15 +2,21 @@
 // real SQLite DB in /tmp - first scan queues everything, second scan skips,
 // mtime change re-queues exactly one, deletion marks missing, reappearance
 // re-queues. Run: ./wfi_test
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <set>
 #include <string>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
 #include <utime.h>
+#include <vector>
 
 #include "../src/config.h"
+#include "../src/cropreserve.h"
 #include "../src/db.h"
 #include "../src/walk.h"
 
@@ -246,6 +252,70 @@ int main() {
             check(db.replace_faces(aid, asz, amt + 2, {r2}, oldc, conflict, err) && !conflict,
                   "replace succeeds after the lock clears");
         }
+    }
+
+    // Crop-path reservation (CodeRabbit #45): two concurrent process runs
+    // starting in the same second derive the same stem, so the path must be
+    // claimed exclusively. A loser must get its own path and must never be
+    // able to truncate or unlink the winner's crop.
+    {
+        const std::string cdir = data + "/crops";
+        check(mkdir(cdir.c_str(), 0700) == 0, "crop dir created");
+        const std::string stem = "p7_t123_f0";
+
+        std::string p1, p2;
+        check(wfi::reserve_crop_file(cdir, stem, p1, err), "first reservation succeeds");
+        check(wfi::reserve_crop_file(cdir, stem, p2, err), "second reservation succeeds despite collision");
+        check(p1 == cdir + "/" + stem + ".jpg", "first reservation gets the base path");
+        check(p2 == cdir + "/" + stem + "_r1.jpg", "loser gets a suffixed path");
+        check(p1 != p2, "racing writers get distinct paths");
+
+        struct stat st1, st2;
+        check(stat(p1.c_str(), &st1) == 0 && stat(p2.c_str(), &st2) == 0,
+              "both reserved files exist");
+        check(st1.st_size == 0 && st2.st_size == 0, "reserved files start empty");
+        check((st1.st_mode & 0777) == 0600 && (st2.st_mode & 0777) == 0600,
+              "reserved files are owner-only 0600");
+
+        // The winner can rewrite its own reservation (the encoder's "wb"
+        // open only ever truncates bytes this run owns).
+        write_file(p1, "winner-bytes");
+        write_file(p2, "loser-bytes");
+        char buf[16] = {0};
+        FILE* rf = std::fopen(p1.c_str(), "rb");
+        check(rf != nullptr && std::fread(buf, 1, 12, rf) == 12 &&
+                  std::string(buf) == "winner-bytes",
+              "winner's bytes survive the loser's reservation");
+        if (rf) std::fclose(rf);
+
+        // Exhaustion: all 100 candidates taken -> clean refusal.
+        for (int i = 2; i < 100; ++i)
+            write_file(cdir + "/" + stem + "_r" + std::to_string(i) + ".jpg", "");
+        std::string px;
+        check(!wfi::reserve_crop_file(cdir, stem, px, err),
+              "reservation refuses when every candidate exists");
+
+        // A real race: two threads grabbing paths for one stem from the
+        // same starting gate must never be handed the same path.
+        const std::string rstem = "p7_t123_f1";
+        std::atomic<bool> go{false};
+        std::mutex mu;
+        std::set<std::string> claimed;
+        auto racer = [&]() {
+            while (!go.load(std::memory_order_acquire)) {
+            }
+            for (int i = 0; i < 8; ++i) {
+                std::string rp, rerr;
+                if (!wfi::reserve_crop_file(cdir, rstem, rp, rerr)) continue;
+                std::lock_guard<std::mutex> lk(mu);
+                claimed.insert(rp);
+            }
+        };
+        std::thread t1(racer), t2(racer);
+        go.store(true, std::memory_order_release);
+        t1.join();
+        t2.join();
+        check(claimed.size() == 16, "16 racing reservations all land on distinct paths");
     }
 
     if (fails > 0) {

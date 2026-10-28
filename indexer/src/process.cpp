@@ -13,6 +13,7 @@
 #include <net.h>
 
 #include "align.h"
+#include "cropreserve.h"
 #include "db.h"
 #include "detect.h"
 #include "jpegio.h"
@@ -136,11 +137,31 @@ bool process_queued(Db& db, const std::string& models_dir,
                           (int)f.x0, (int)f.y0, (int)f.x1, (int)f.y1);
             r.bbox = bbox;
             r.embedding = wfp::arcface_embed(rec, chip);
-            r.crop_path = "crops/p" + std::to_string(q.id) + "_t" +
-                          std::to_string(run_stamp) + "_f" +
-                          std::to_string(fi) + ".jpg";
+            // Two concurrent runs in the same second derive the same path
+            // (run_stamp has one-second resolution): claim it exclusively
+            // BEFORE encoding, so a loser never truncates the winner's
+            // crop with "wb" and never unlinks a committed path after its
+            // replace_faces version check fails (CodeRabbit #45).
+            std::string abs_crop;
+            if (!reserve_crop_file(data_dir + "/crops",
+                                   "p" + std::to_string(q.id) + "_t" +
+                                       std::to_string(run_stamp) + "_f" +
+                                       std::to_string(fi),
+                                   abs_crop, err)) {
+                std::fprintf(stderr, "crop path reservation failed: %s\n",
+                             err.c_str());
+                crop_failed = true;
+                break;
+            }
+            r.crop_path = "crops" + abs_crop.substr(abs_crop.find_last_of('/'));
             if (!wfp::encode_jpeg(chip.pixels.data(), chip.w, chip.h,
-                                  data_dir + "/" + r.crop_path)) {
+                                  abs_crop)) {
+                // Do NOT unlink here: encode_jpeg already removed any
+                // partial file, and if it failed at fopen the empty
+                // reservation stays - unlinking now could delete a path a
+                // concurrent run just claimed after that remove. The
+                // unreferenced empty file is reclaimed by the orphan-crop
+                // GC (issue #47).
                 std::fprintf(stderr, "crop write failed for %s\n",
                              r.crop_path.c_str());
                 crop_failed = true;
@@ -204,7 +225,9 @@ bool process_queued(Db& db, const std::string& models_dir,
         }
         if (!committed) {
             // Nothing committed: this run's staged crops are referenced by
-            // nothing and always go away.
+            // nothing and always go away. Every path in new_crops was
+            // created by THIS run via O_EXCL reservation, so unlinking it
+            // can never remove another run's committed crop.
             for (const std::string& c : new_crops)
                 if (safe_crop_rel(c)) unlink((data_dir + "/" + c).c_str());
             if (conflict) {

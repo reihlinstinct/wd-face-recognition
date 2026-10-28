@@ -26,6 +26,7 @@ if(WDF_FACES)
     set(WDF_PIPELINE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../pipeline/src)
     add_executable(wdf_faces
         src/faces_main.cpp src/process.cpp src/config.cpp src/db.cpp
+        src/cropreserve.cpp
         ${WDF_PIPELINE_DIR}/align.cpp ${WDF_PIPELINE_DIR}/detect.cpp
         ${WDF_PIPELINE_DIR}/jpegio.cpp)
     target_include_directories(wdf_faces PRIVATE ${WDF_PIPELINE_DIR} ${JPEG_INCLUDE_DIR})
@@ -35,7 +36,7 @@ endif()
 option(WDF_INDEXER_TESTS "Build the indexer unit tests" OFF)
 if(WDF_INDEXER_TESTS)
     enable_testing()
-    add_executable(wfi_test tests/indexer_test.cpp src/config.cpp src/db.cpp src/walk.cpp)
+    add_executable(wfi_test tests/indexer_test.cpp src/config.cpp src/db.cpp src/walk.cpp src/cropreserve.cpp)
     target_link_libraries(wfi_test PRIVATE sqlite3 pthread dl)
     add_test(NAME indexer COMMAND wfi_test)
 endif()
