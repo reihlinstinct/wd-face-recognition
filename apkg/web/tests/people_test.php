@@ -117,6 +117,15 @@ check(wdf_rename_request_error('1', "\xe2\x80\x83") !== '',
     'U+2003-only name refused');
 check(wdf_rename_request_error('1', " \xc2\xa0Dana\xe2\x80\x83") === '',
     'mixed ASCII + Unicode padding passes');
+
+// Control characters (issue #89): NUL would reach proc_open argv and
+// throw on PHP 8; the rest of the C0 range is refused with it. The id
+// is safe by construction (regex \\d{1,10}) - pinned explicitly.
+check(wdf_rename_request_error('1', "Dana\x00x") !== '', 'NUL in name refused');
+check(wdf_rename_request_error('1', "Dan\x1f") !== '', 'C0 control in name refused');
+check(strpos(wdf_rename_request_error('1', "a\x00"), 'control') !== false,
+    'control-char message is specific');
+check(wdf_post_id("1\x00") === null, 'NUL in id rejected by the digit gate');
 // The cap counts characters, not bytes (review #85). mbstring is
 // REQUIRED for these assertions - fail loudly if the CI php lacks it
 // rather than silently skipping the character-cap pin.
