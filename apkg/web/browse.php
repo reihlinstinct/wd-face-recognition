@@ -2,8 +2,10 @@
 // Folder browser for the demo photo-folder picker (issue #26).
 // Server-rendered, no JavaScript: plain GET links descend into /shares and a
 // "use this folder" link prefills the demo form. Listing is restricted to
-// /shares (reusing wdf_normalize_photos_dir plus a realpath symlink guard),
-// never follows symlinks, and every name/path is HTML-escaped on render.
+// /shares (reusing wdf_normalize_photos_dir plus an allowed-real-roots
+// guard). OS5 share symlinks at the shares root are followed one hop (that
+// is where the shares actually live, issue #28); symlinks inside shares are
+// never followed. Every name/path is HTML-escaped on render.
 require_once __DIR__ . '/paths.php';
 
 const WDF_BROWSE_MAX_PHOTOS = 1000; // same caps as the C++ demo scanner
@@ -67,13 +69,18 @@ function wdf_browse_list(string $dir, string $allowedPrefix = '/shares/'): ?arra
         return null;
     }
     // Symlink guard on the selected path: its real location must stay under
-    // the real shares root.
-    $realRoot = realpath($rootPath);
+    // an allowed root (the real shares root or a share's real target - on
+    // OS5 each share under /shares is a symlink into the data volume).
+    if (!wdf_path_symlink_components_ok($norm, $allowedPrefix)) {
+        return null; // nested symlinks are never followed
+    }
+    $roots = wdf_shares_real_roots($allowedPrefix);
     $realDir = realpath($norm);
-    if ($realRoot === false || $realDir === false
-        || ($realDir !== $realRoot && strpos($realDir, $realRoot . '/') !== 0)) {
+    if ($roots === [] || $realDir === false
+        || !wdf_real_path_under_roots($realDir, $roots)) {
         return null;
     }
+    $atSharesRoot = ($realDir === $roots[0]);
     $names = scandir($realDir);
     if ($names === false) {
         return null;
@@ -84,13 +91,27 @@ function wdf_browse_list(string $dir, string $allowedPrefix = '/shares/'): ?arra
             continue; // no dotfiles (.AppleDouble and friends), no ".." escape
         }
         $full = $realDir . '/' . $name;
-        if (is_link($full) || !is_dir($full)) {
+        if (is_link($full)) {
+            // Share-level symlinks live at the shares root (OS5 layout);
+            // nested symlinks are never followed, so loops cannot form.
+            if (!$atSharesRoot) {
+                continue;
+            }
+            $target = realpath($full);
+            if ($target === false || !is_dir($target)
+                || !wdf_real_path_under_roots($target, $roots)) {
+                continue;
+            }
+            $countDir = $target;
+        } elseif (!is_dir($full)) {
             continue;
+        } else {
+            $countDir = $full;
         }
         $subdirs[] = [
             'name' => $name,
             'path' => rtrim($norm, '/') . '/' . $name,
-            'jpeg_count' => wdf_browse_count_jpegs($full),
+            'jpeg_count' => wdf_browse_count_jpegs($countDir),
         ];
     }
     usort($subdirs, function ($a, $b) {
