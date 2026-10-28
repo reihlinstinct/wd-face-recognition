@@ -105,8 +105,12 @@ jobs:
           build/indexer/wdf_indexer build/indexer/wdf_faces
           /tmp/wdf-photos /tmp/wdf-models
 
-      - name: Upload demo output
+      - name: Upload demo logs
+        # Privacy (issue #55): never upload image output - the demo crops
+        # are face images. Logs and metadata only.
         uses: actions/upload-artifact@v4
         with:
-          name: wdf-demo-output
-          path: /tmp/wdf-demo-out/
+          name: wdf-demo-logs
+          path: |
+            /tmp/demo.log
+            /tmp/bad.log
