@@ -107,6 +107,16 @@ check(wdf_rename_request_error('1', str_repeat('a', 128)) === '',
 check(wdf_rename_request_error('1', '  דנה  ') === '',
     'Hebrew name with padding passes');
 check(wdf_rename_request_error('1', 'Dana') === '', 'valid rename passes');
+
+// Unicode whitespace (issue #88): trim() alone leaves NBSP / U+2003.
+check(wdf_name_trim("\xc2\xa0") === '', 'NBSP-only trims to empty');
+check(wdf_name_trim("\xe2\x80\x83") === '', 'em-space-only trims to empty');
+check(wdf_rename_request_error('1', "\xc2\xa0") !== '',
+    'NBSP-only name refused');
+check(wdf_rename_request_error('1', "\xe2\x80\x83") !== '',
+    'U+2003-only name refused');
+check(wdf_rename_request_error('1', " \xc2\xa0Dana\xe2\x80\x83") === '',
+    'mixed ASCII + Unicode padding passes');
 // The cap counts characters, not bytes (review #85). mbstring is
 // REQUIRED for these assertions - fail loudly if the CI php lacks it
 // rather than silently skipping the character-cap pin.
