@@ -194,8 +194,11 @@ int main() {
               "changed photo re-queued");
         // A stale version (the pre-change mtime) must NOT commit either.
         conflict = false;
+        err = "database is locked";  // stale error from a previous call
         check(!db.replace_faces(aid, asz, amt, {r2}, oldc, conflict, err) && conflict,
               "stale version refuses to commit");
+        check(err.empty(),
+              "conflict does not inherit a stale lock error (CodeRabbit #45)");
         conflict = true;
         check(db.replace_faces(aid, asz, amt + 1, {r2}, oldc, conflict, err) && !conflict,
               "second replace_faces commits");

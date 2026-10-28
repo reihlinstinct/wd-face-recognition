@@ -301,6 +301,7 @@ bool Db::replace_faces(long photo_id, int64_t size, int64_t mtime,
                        std::vector<std::string>& old_crops,
                        bool& conflict, std::string& err) {
     conflict = false;
+    err.clear();  // no stale content: a fresh failure must set it (CodeRabbit #45)
     if (!flush()) {
         err = "COMMIT of the pending scan batch failed";
         return false;
@@ -386,6 +387,7 @@ bool Db::replace_faces(long photo_id, int64_t size, int64_t mtime,
 bool Db::mark_failed(long photo_id, int64_t size, int64_t mtime,
                      const std::string& reason, bool& conflict, std::string& err) {
     conflict = false;
+    err.clear();
     if (!flush()) {
         err = "COMMIT of the pending scan batch failed";
         return false;

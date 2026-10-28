@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <string>
 
+#include <jpeglib.h>
+
 #include "../src/align.h"
 #include "../src/cluster.h"
 #include "../src/jpegio.h"
@@ -114,6 +116,39 @@ int main() {
         // Encode failure must return false, never crash (crop-write path).
         check(!wfp::encode_jpeg(grad, 64, 64, "/no/such/dir/x.jpg"),
               "encode to a bad dir returns false");
+        // Progressive JPEG over the cap: refused from the header, before
+        // jpeg_start_decompress allocates coefficient arrays (CodeRabbit
+        // #45). Behavior contract: same "too large" refusal.
+        {
+            FILE* f = std::fopen(p.c_str(), "wb");
+            check(f != nullptr, "progressive fixture opens");
+            if (f) {
+                jpeg_compress_struct cinfo{};
+                jpeg_error_mgr jerr{};
+                cinfo.err = jpeg_std_error(&jerr);
+                jpeg_create_compress(&cinfo);
+                jpeg_stdio_dest(&cinfo, f);
+                cinfo.image_width = 40;
+                cinfo.image_height = 40;
+                cinfo.input_components = 3;
+                cinfo.in_color_space = JCS_RGB;
+                jpeg_set_defaults(&cinfo);
+                jpeg_simple_progression(&cinfo);
+                jpeg_start_compress(&cinfo, TRUE);
+                unsigned char row[40 * 3] = {};
+                while (cinfo.next_scanline < 40) {
+                    JSAMPROW rp = row;
+                    jpeg_write_scanlines(&cinfo, &rp, 1);
+                }
+                jpeg_finish_compress(&cinfo);
+                jpeg_destroy_compress(&cinfo);
+                std::fclose(f);
+                wfp::RgbImage prog = wfp::decode_jpeg(p, &reason, 1000);
+                check(prog.pixels.empty() && reason == "too large",
+                      "progressive oversized refused pre-decompress");
+                std::remove(p.c_str());
+            }
+        }
     }
 
     if (fails == 0) std::printf("pipeline tests: all passed\n");

@@ -59,11 +59,11 @@ RgbImage decode_jpeg(const std::string& path, std::string* reason,
     created = true;
     jpeg_stdio_src(&cinfo, f);
     if (jpeg_read_header(&cinfo, TRUE) == JPEG_HEADER_OK) {
-        cinfo.out_color_space = JCS_RGB;
-        jpeg_start_decompress(&cinfo);
-        w = (int)cinfo.output_width;
-        h = (int)cinfo.output_height;
-        // Pixel cap BEFORE allocating (independent review #45).
+        // Pixel cap right after the header, BEFORE jpeg_start_decompress:
+        // start allocates full coefficient arrays for progressive JPEGs,
+        // so capping after it barely caps anything (CodeRabbit #45).
+        w = (int)cinfo.image_width;
+        h = (int)cinfo.image_height;
         if ((int64_t)w * h > max_pixels) {
             jpeg_destroy_decompress(&cinfo);
             created = false;
@@ -73,6 +73,10 @@ RgbImage decode_jpeg(const std::string& path, std::string* reason,
                          path.c_str(), w, h, (long long)max_pixels);
             return {};
         }
+        cinfo.out_color_space = JCS_RGB;
+        jpeg_start_decompress(&cinfo);
+        w = (int)cinfo.output_width;
+        h = (int)cinfo.output_height;
         const size_t buf_size = (size_t)w * h * 3;
         // new[] so the success path can adopt the buffer with no copy.
         buf = new (std::nothrow) unsigned char[buf_size];
