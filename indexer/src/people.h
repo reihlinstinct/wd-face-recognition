@@ -27,5 +27,13 @@ struct ClusterCounts {
 bool recluster(Db& db, double threshold, ClusterCounts& counts,
                std::string& err);
 
+// JSON for the PHP pages (PR 3c): the stripped OS5 PHP has no sqlite
+// extension, so the pages shell out to `wdf_faces people|person` and
+// render these. json_escape handles quotes, backslashes and control
+// chars; UTF-8 (Hebrew names) passes through untouched.
+std::string json_escape(const std::string& s);
+std::string people_json(const std::vector<PersonSummary>& people);
+std::string person_json(const PersonSummary& who,
+                        const std::vector<PersonFace>& faces);
 
 }  // namespace wfi

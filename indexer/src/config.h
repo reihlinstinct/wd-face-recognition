@@ -30,14 +30,20 @@ struct CliOptions {
     long limit = 500;        // per-invocation cap
     int threads_override = 0;
     double threshold = 0.5;  // demo-calibrated cosine cut
+    long id_arg = 0;         // person/rename: --id N (0 = absent)
+    long from_arg = 0;       // merge: --from N
+    long to_arg = 0;         // merge: --to N
+    std::string name_arg;    // rename: --name NAME
 };
 
 // Parses argv[first..] as flag/value pairs for the given subcommand.
 // Every flag needs a value, must be known, and must be supported by that
-// subcommand: cluster takes --config/--threshold only, process takes
-// --config/--models/--limit/--threads (issue #69). Violations are
-// rejected BEFORE the caller opens the index.
-bool parse_cli_options(int argc, char** argv, int first, bool is_cluster,
-                       CliOptions& out, std::string& err);
+// subcommand: process takes --config/--models/--limit/--threads, cluster
+// --config/--threshold, people --config, person --config/--id, rename
+// --config/--id/--name, merge --config/--from/--to (issues #69, #50 PR
+// 3c). Violations are rejected BEFORE the caller opens the index.
+bool parse_cli_options(int argc, char** argv, int first,
+                       const char* subcommand, CliOptions& out,
+                       std::string& err);
 
 }  // namespace wfi

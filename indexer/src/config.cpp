@@ -86,8 +86,31 @@ static bool parse_long_range(const char* s, long lo, long hi, long& out) {
     return true;
 }
 
-bool parse_cli_options(int argc, char** argv, int first, bool is_cluster,
-                       CliOptions& out, std::string& err) {
+// Per-subcommand flag sets (issue #69 extended to the people commands,
+// #50 PR 3c). --config is universal; anything else belongs to exactly
+// the subcommands that use it.
+static bool option_allowed(const char* sub, const char* flag) {
+    if (std::strcmp(flag, "--config") == 0) return true;
+    if (std::strcmp(sub, "process") == 0)
+        return std::strcmp(flag, "--models") == 0 ||
+               std::strcmp(flag, "--limit") == 0 ||
+               std::strcmp(flag, "--threads") == 0;
+    if (std::strcmp(sub, "cluster") == 0)
+        return std::strcmp(flag, "--threshold") == 0;
+    if (std::strcmp(sub, "person") == 0)
+        return std::strcmp(flag, "--id") == 0;
+    if (std::strcmp(sub, "rename") == 0)
+        return std::strcmp(flag, "--id") == 0 ||
+               std::strcmp(flag, "--name") == 0;
+    if (std::strcmp(sub, "merge") == 0)
+        return std::strcmp(flag, "--from") == 0 ||
+               std::strcmp(flag, "--to") == 0;
+    return false;  // people takes --config only
+}
+
+bool parse_cli_options(int argc, char** argv, int first,
+                       const char* subcommand, CliOptions& out,
+                       std::string& err) {
     for (int i = first; i < argc; i += 2) {
         const char* flag = argv[i];
         if (i + 1 >= argc) {
@@ -100,19 +123,18 @@ bool parse_cli_options(int argc, char** argv, int first, bool is_cluster,
             std::strcmp(flag, "--models") == 0 ||
             std::strcmp(flag, "--limit") == 0 ||
             std::strcmp(flag, "--threads") == 0 ||
-            std::strcmp(flag, "--threshold") == 0;
+            std::strcmp(flag, "--threshold") == 0 ||
+            std::strcmp(flag, "--id") == 0 ||
+            std::strcmp(flag, "--from") == 0 ||
+            std::strcmp(flag, "--to") == 0 ||
+            std::strcmp(flag, "--name") == 0;
         if (!known) {
             err = std::string("unknown option '") + flag + "'";
             return false;
         }
-        const bool allowed =
-            std::strcmp(flag, "--config") == 0 ||
-            (is_cluster && std::strcmp(flag, "--threshold") == 0) ||
-            (!is_cluster && std::strcmp(flag, "--threshold") != 0);
-        if (!allowed) {
-            err = std::string("option '") + flag +
-                  (is_cluster ? "' is not valid for cluster"
-                              : "' is not valid for process");
+        if (!option_allowed(subcommand, flag)) {
+            err = std::string("option '") + flag + "' is not valid for " +
+                  subcommand;
             return false;
         }
         if (std::strcmp(flag, "--config") == 0) out.config_path = val;
@@ -142,6 +164,26 @@ bool parse_cli_options(int argc, char** argv, int first, bool is_cluster,
                       "': want a finite number in [-1, 1]";
                 return false;
             }
+        } else if (std::strcmp(flag, "--id") == 0) {
+            if (!parse_long_range(val, 1, 1000000000, out.id_arg)) {
+                err = std::string("bad --id '") + val +
+                      "': want an integer in [1, 1000000000]";
+                return false;
+            }
+        } else if (std::strcmp(flag, "--from") == 0) {
+            if (!parse_long_range(val, 1, 1000000000, out.from_arg)) {
+                err = std::string("bad --from '") + val +
+                      "': want an integer in [1, 1000000000]";
+                return false;
+            }
+        } else if (std::strcmp(flag, "--to") == 0) {
+            if (!parse_long_range(val, 1, 1000000000, out.to_arg)) {
+                err = std::string("bad --to '") + val +
+                      "': want an integer in [1, 1000000000]";
+                return false;
+            }
+        } else if (std::strcmp(flag, "--name") == 0) {
+            out.name_arg = val;
         }
     }
     return true;

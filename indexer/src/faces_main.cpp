@@ -20,20 +20,27 @@ int main(int argc, char** argv) {
         std::printf("wdf_faces %s\n", WFF_VERSION);
         return 0;
     }
-    if (argc < 3 || (std::strcmp(argv[1], "process") != 0 &&
-                     std::strcmp(argv[1], "cluster") != 0)) {
+    const std::string cmd = argc >= 2 ? argv[1] : "";
+    const bool is_read = cmd == "people" || cmd == "person";
+    const bool is_write = cmd == "rename" || cmd == "merge";
+    if (argc < 3 || (cmd != "process" && cmd != "cluster" && !is_read && !is_write)) {
         std::fprintf(stderr,
             "usage: wdf_faces process --config FILE [--models DIR] [--limit N] [--threads N]\n"
-            "       wdf_faces cluster --config FILE [--threshold 0.5]\n");
+            "       wdf_faces cluster --config FILE [--threshold 0.5]\n"
+            "       wdf_faces people --config FILE\n"
+            "       wdf_faces person --config FILE --id N\n"
+            "       wdf_faces rename --config FILE --id N --name NAME\n"
+            "       wdf_faces merge --config FILE --from N --to N\n");
         return 2;
     }
-    const bool is_cluster = std::strcmp(argv[1], "cluster") == 0;
+    const bool is_cluster = cmd == "cluster";
     // Unknown or incomplete options are rejected BEFORE the index is
     // opened: a silently ignored flag must never lead to a full assignment
-    // rewrite under the default threshold (issue #68).
+    // rewrite under the default threshold (issue #68). Each subcommand
+    // accepts only its own flags (issue #69).
     wfi::CliOptions opt;
     std::string err;
-    if (!wfi::parse_cli_options(argc, argv, 2, is_cluster, opt, err)) {
+    if (!wfi::parse_cli_options(argc, argv, 2, cmd.c_str(), opt, err)) {
         std::fprintf(stderr, "%s\n", err.c_str());
         return 2;
     }
@@ -42,6 +49,10 @@ int main(int argc, char** argv) {
     const long limit = opt.limit;
     const int threads_override = opt.threads_override;
     const double threshold = opt.threshold;
+    const long id_arg = opt.id_arg;
+    const long from_arg = opt.from_arg;
+    const long to_arg = opt.to_arg;
+    const std::string& name_arg = opt.name_arg;
     wfi::Config cfg;
     if (!wfi::load_config(config_path, cfg, err)) {
         std::fprintf(stderr, "%s\n", err.c_str());
@@ -51,6 +62,70 @@ int main(int argc, char** argv) {
     // on a shared NAS (independent review #45).
     umask(0077);
     wfi::renice_self();
+
+    // people/person/rename/merge serve the PHP pages (issue #50 PR 3c):
+    // the stripped OS5 PHP has no sqlite extension, so the pages shell
+    // out and parse the JSON reads; writes stay commands so auth lives in
+    // the page. No models involved.
+    if (is_read || is_write) {
+        wfi::Db db;
+        if (!db.open(cfg.data_dir + "/index.db", err)) {
+            std::fprintf(stderr, "%s\n", err.c_str());
+            return 1;
+        }
+        if (cmd == "people") {
+            std::vector<wfi::PersonSummary> people;
+            if (!db.people_list(people, err)) {
+                std::fprintf(stderr, "%s\n", err.c_str());
+                return 1;
+            }
+            std::printf("%s\n", wfi::people_json(people).c_str());
+            return 0;
+        }
+        if (cmd == "person") {
+            if (id_arg < 1) {
+                std::fprintf(stderr, "person needs --id N\n");
+                return 2;
+            }
+            std::vector<wfi::PersonSummary> people;
+            if (!db.people_list(people, err)) {
+                std::fprintf(stderr, "%s\n", err.c_str());
+                return 1;
+            }
+            wfi::PersonSummary who;
+            who.id = id_arg;
+            for (const auto& ps : people)
+                if (ps.id == id_arg) who = ps;
+            std::vector<wfi::PersonFace> faces;
+            if (!db.person_faces(id_arg, faces, err)) {
+                std::fprintf(stderr, "%s\n", err.c_str());
+                return 1;
+            }
+            std::printf("%s\n", wfi::person_json(who, faces).c_str());
+            return 0;
+        }
+        if (cmd == "rename") {
+            if (id_arg < 1) {
+                std::fprintf(stderr, "rename needs --id N\n");
+                return 2;
+            }
+            if (!db.rename_cluster(id_arg, name_arg, err)) {
+                std::fprintf(stderr, "%s\n", err.c_str());
+                return 1;
+            }
+            return 0;
+        }
+        // merge
+        if (from_arg < 1 || to_arg < 1) {
+            std::fprintf(stderr, "merge needs --from N --to N\n");
+            return 2;
+        }
+        if (!db.merge_clusters(from_arg, to_arg, err)) {
+            std::fprintf(stderr, "%s\n", err.c_str());
+            return 1;
+        }
+        return 0;
+    }
 
     // cluster needs no models and no queue cap: it rewrites assignments
     // from stored embeddings only (issue #50).

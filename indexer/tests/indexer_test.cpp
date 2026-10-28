@@ -655,21 +655,21 @@ int main() {
         char a0[] = "wdf_faces", a1[] = "cluster", a2[] = "--config",
              a3[] = "c.conf", a4[] = "--threshold", a5[] = "0.7";
         char* ok_argv[] = {a0, a1, a2, a3, a4, a5};
-        check(wfi::parse_cli_options(6, ok_argv, 2, true, opt, oerr) &&
+        check(wfi::parse_cli_options(6, ok_argv, 2, "cluster", opt, oerr) &&
                   opt.config_path == "c.conf" && opt.threshold == 0.7,
               "valid options parse");
         char b2[] = "--bogus", b3[] = "1";
         char* bad_argv[] = {a0, a1, b2, b3};
-        check(!wfi::parse_cli_options(4, bad_argv, 2, true, opt, oerr) &&
+        check(!wfi::parse_cli_options(4, bad_argv, 2, "cluster", opt, oerr) &&
                   oerr.find("unknown") != std::string::npos,
               "unknown option refused");
         char* trail_argv[] = {a0, a1, a4};
-        check(!wfi::parse_cli_options(3, trail_argv, 2, true, opt, oerr) &&
+        check(!wfi::parse_cli_options(3, trail_argv, 2, "cluster", opt, oerr) &&
                   oerr.find("needs a value") != std::string::npos,
               "trailing valueless option refused");
         char t5[] = "abc";
         char* badth_argv[] = {a0, a1, a4, t5};
-        check(!wfi::parse_cli_options(4, badth_argv, 2, true, opt, oerr),
+        check(!wfi::parse_cli_options(4, badth_argv, 2, "cluster", opt, oerr),
               "bad threshold refused at parse");
     }
 
@@ -681,25 +681,25 @@ int main() {
         char a0[] = "wdf_faces", a1[] = "cluster", a2[] = "--limit",
              a3[] = "10";
         char* cross_argv[] = {a0, a1, a2, a3};
-        check(!wfi::parse_cli_options(4, cross_argv, 2, true, opt, oerr) &&
+        check(!wfi::parse_cli_options(4, cross_argv, 2, "cluster", opt, oerr) &&
                   oerr.find("not valid for cluster") != std::string::npos,
               "cluster refuses --limit");
         char t2[] = "--threshold", t3[] = "0.7";
         char* cth_argv[] = {a0, a1, t2, t3};
-        check(!wfi::parse_cli_options(4, cth_argv, 2, false, opt, oerr) &&
+        check(!wfi::parse_cli_options(4, cth_argv, 2, "process", opt, oerr) &&
                   oerr.find("not valid for process") != std::string::npos,
               "process refuses --threshold");
         char m2[] = "--models", m3[] = "/m";
         char* cm_argv[] = {a0, a1, m2, m3};
-        check(!wfi::parse_cli_options(4, cm_argv, 2, true, opt, oerr),
+        check(!wfi::parse_cli_options(4, cm_argv, 2, "cluster", opt, oerr),
               "cluster refuses --models");
         char th2[] = "--threads", th3[] = "4";
         char* cth2_argv[] = {a0, a1, th2, th3};
-        check(!wfi::parse_cli_options(4, cth2_argv, 2, true, opt, oerr),
+        check(!wfi::parse_cli_options(4, cth2_argv, 2, "cluster", opt, oerr),
               "cluster refuses --threads");
         char c2[] = "--config", c3[] = "c.conf", l2[] = "--limit", l3[] = "10";
         char* pok_argv[] = {a0, a1, c2, c3, l2, l3};
-        check(wfi::parse_cli_options(6, pok_argv, 2, false, opt, oerr) &&
+        check(wfi::parse_cli_options(6, pok_argv, 2, "process", opt, oerr) &&
                   opt.limit == 10,
               "process accepts its own flags");
     }
@@ -711,38 +711,83 @@ int main() {
         char a0[] = "wdf_faces", a1[] = "process", f1[] = "--limit";
         char v1[] = "10x";
         char* junk_argv[] = {a0, a1, f1, v1};
-        check(!wfi::parse_cli_options(4, junk_argv, 2, false, opt, oerr),
+        check(!wfi::parse_cli_options(4, junk_argv, 2, "process", opt, oerr),
               "limit with trailing junk refused");
         char v2[] = "0";
         char* zero_argv[] = {a0, a1, f1, v2};
-        check(!wfi::parse_cli_options(4, zero_argv, 2, false, opt, oerr),
+        check(!wfi::parse_cli_options(4, zero_argv, 2, "process", opt, oerr),
               "limit 0 refused");
         char v3[] = "-5";
         char* neg_argv[] = {a0, a1, f1, v3};
-        check(!wfi::parse_cli_options(4, neg_argv, 2, false, opt, oerr),
+        check(!wfi::parse_cli_options(4, neg_argv, 2, "process", opt, oerr),
               "negative limit refused");
         char v4[] = "100001";
         char* big_argv[] = {a0, a1, f1, v4};
-        check(!wfi::parse_cli_options(4, big_argv, 2, false, opt, oerr),
+        check(!wfi::parse_cli_options(4, big_argv, 2, "process", opt, oerr),
               "limit above cap refused");
         char v5[] = "1";
         char* edge_argv[] = {a0, a1, f1, v5};
-        check(wfi::parse_cli_options(4, edge_argv, 2, false, opt, oerr) &&
+        check(wfi::parse_cli_options(4, edge_argv, 2, "process", opt, oerr) &&
                   opt.limit == 1,
               "limit 1 is the valid edge");
         char f2[] = "--threads", t1[] = "0";
         char* tz_argv[] = {a0, a1, f2, t1};
-        check(!wfi::parse_cli_options(4, tz_argv, 2, false, opt, oerr),
+        check(!wfi::parse_cli_options(4, tz_argv, 2, "process", opt, oerr),
               "threads 0 refused");
         char t2[] = "33";
         char* tb_argv[] = {a0, a1, f2, t2};
-        check(!wfi::parse_cli_options(4, tb_argv, 2, false, opt, oerr),
+        check(!wfi::parse_cli_options(4, tb_argv, 2, "process", opt, oerr),
               "threads above cap refused");
         char t3[] = "1";
         char* te_argv[] = {a0, a1, f2, t3};
-        check(wfi::parse_cli_options(4, te_argv, 2, false, opt, oerr) &&
+        check(wfi::parse_cli_options(4, te_argv, 2, "process", opt, oerr) &&
                   opt.threads_override == 1,
               "threads 1 is the valid edge");
+    }
+
+    // Per-subcommand options for the people commands (#50 PR 3c, extending
+    // issue #69): each accepts only its own flags; ids are validated.
+    {
+        wfi::CliOptions opt;
+        std::string oerr;
+        char a0[] = "wdf_faces", c2[] = "--config", c3[] = "c.conf";
+        char p1[] = "person", i2[] = "--id", i3[] = "7";
+        char* person_argv[] = {a0, p1, c2, c3, i2, i3};
+        check(wfi::parse_cli_options(6, person_argv, 2, "person", opt, oerr) &&
+                  opt.id_arg == 7,
+              "person accepts --config --id");
+        char l2[] = "--limit", l3[] = "10";
+        char* pl_argv[] = {a0, p1, c2, c3, l2, l3};
+        check(!wfi::parse_cli_options(6, pl_argv, 2, "person", opt, oerr) &&
+                  oerr.find("not valid for person") != std::string::npos,
+              "person refuses --limit");
+        char m1[] = "merge", f2[] = "--from", f3[] = "3",
+             t2[] = "--to", t3[] = "4";
+        char* merge_argv[] = {a0, m1, c2, c3, f2, f3, t2, t3};
+        check(wfi::parse_cli_options(8, merge_argv, 2, "merge", opt, oerr) &&
+                  opt.from_arg == 3 && opt.to_arg == 4,
+              "merge accepts --from --to");
+        char r1[] = "rename", n2[] = "--name", n3[] = "Dana";
+        char* rn_argv[] = {a0, r1, c2, c3, i2, i3, n2, n3};
+        check(wfi::parse_cli_options(8, rn_argv, 2, "rename", opt, oerr) &&
+                  opt.id_arg == 7 && opt.name_arg == "Dana",
+              "rename accepts --id --name");
+        char pe1[] = "people";
+        char* people_argv[] = {a0, pe1, c2, c3};
+        check(wfi::parse_cli_options(4, people_argv, 2, "people", opt, oerr),
+              "people accepts --config only");
+        char* pi_argv[] = {a0, pe1, c2, c3, i2, i3};
+        check(!wfi::parse_cli_options(6, pi_argv, 2, "people", opt, oerr) &&
+                  oerr.find("not valid for people") != std::string::npos,
+              "people refuses --id");
+        char z3[] = "0";
+        char* pz_argv[] = {a0, p1, c2, c3, i2, z3};
+        check(!wfi::parse_cli_options(6, pz_argv, 2, "person", opt, oerr),
+              "id 0 refused");
+        char j3[] = "7x";
+        char* pj_argv[] = {a0, p1, c2, c3, i2, j3};
+        check(!wfi::parse_cli_options(6, pj_argv, 2, "person", opt, oerr),
+              "id with trailing junk refused");
     }
 
     // recluster (issue #50, PR 3b): union-find over stored embeddings at
@@ -818,6 +863,47 @@ int main() {
         bool ima_named = false;
         for (const auto& ps : rp) if (ps.id == first_id && ps.name == "Ima") ima_named = true;
         check(ima_named, "name survives the full recluster");
+    }
+
+    // JSON for the PHP pages (issue #50, PR 3c): escaping and shape.
+    {
+        check(wfi::json_escape("plain") == "plain", "plain text untouched");
+        check(wfi::json_escape("a\"b\\c") == "a\\\"b\\\\c",
+              "quotes and backslashes escaped");
+        check(wfi::json_escape("l1\nl2\t!") == "l1\\nl2\\t!",
+              "control chars escaped");
+        // Hebrew passes through as UTF-8 bytes (\xD7\x90 = aleph).
+        check(wfi::json_escape("\xD7\x90\xD7\x9E\xD7\x90") ==
+                  "\xD7\x90\xD7\x9E\xD7\x90",
+              "Hebrew UTF-8 passes through");
+
+        std::vector<wfi::PersonSummary> people;
+        check(db.people_list(people, err), "people list for json");
+        const std::string pj = wfi::people_json(people);
+        check(pj.front() == '[' && pj.back() == ']', "people json is an array");
+        check(pj.find("\"id\":") != std::string::npos &&
+                  pj.find("\"name\":\"Ima\"") != std::string::npos &&
+                  pj.find("\"faces\":") != std::string::npos &&
+                  pj.find("\"cover\":\"crops/") != std::string::npos,
+              "people json carries id/name/faces/cover");
+
+        wfi::PersonSummary who;
+        for (const auto& ps : people) if (ps.name == "Ima") who = ps;
+        std::vector<wfi::PersonFace> pfaces;
+        check(db.person_faces(who.id, pfaces, err), "person faces for json");
+        const std::string sj = wfi::person_json(who, pfaces);
+        check(sj.find("\"name\":\"Ima\"") != std::string::npos &&
+                  sj.find("\"photo\":\"") != std::string::npos &&
+                  sj.find("\"bbox\":\"0,0,1,1\"") != std::string::npos,
+              "person json carries name, photos, bboxes");
+
+        // A hostile name must not break the JSON shape.
+        wfi::PersonSummary nasty;
+        nasty.id = 7;
+        nasty.name = "x\",\"name\":\"evil";
+        const std::string nj = wfi::person_json(nasty, {});
+        check(nj.find("x\\\",\\\"name\\\":\\\"evil") != std::string::npos,
+              "hostile name stays inside its string");
     }
 
     if (fails > 0) {
