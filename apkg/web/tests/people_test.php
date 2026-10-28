@@ -126,6 +126,11 @@ check(wdf_rename_request_error('1', "Dan\x1f") !== '', 'C0 control in name refus
 check(strpos(wdf_rename_request_error('1', "a\x00"), 'control') !== false,
     'control-char message is specific');
 check(wdf_post_id("1\x00") === null, 'NUL in id rejected by the digit gate');
+// The raw input is checked BEFORE trimming (review #89): a trailing
+// tab or newline is refused, never silently stripped and accepted.
+check(wdf_rename_request_error('1', "Dana\t") !== '', 'trailing tab refused');
+check(wdf_rename_request_error('1', "Dana\n") !== '', 'trailing newline refused');
+check(wdf_rename_request_error('1', "\tDana") !== '', 'leading tab refused');
 // The cap counts characters, not bytes (review #85). mbstring is
 // REQUIRED for these assertions - fail loudly if the CI php lacks it
 // rather than silently skipping the character-cap pin.

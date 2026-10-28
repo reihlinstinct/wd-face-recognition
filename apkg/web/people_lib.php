@@ -180,15 +180,16 @@ function wdf_rename_request_error(string $idRaw, string $nameRaw): string
     if (wdf_post_id($idRaw) === null) {
         return 'Bad rename request.';
     }
+    // Control characters (issue #89) are checked on the RAW input,
+    // before trimming: a trailing tab must be refused, not silently
+    // stripped and accepted (review #89). A %00 name passes empty
+    // validation and PHP 8 proc_open THROWS on NUL in argv.
+    if (preg_match('/[\x00-\x1f]/', $nameRaw) === 1) {
+        return 'Names cannot contain control characters.';
+    }
     $name = wdf_name_trim($nameRaw);
     if ($name === '') {
         return 'Enter a name for this person first.';
-    }
-    // Control characters (issue #89): a %00 name passes empty
-    // validation and PHP 8 proc_open THROWS on NUL in argv; other
-    // control chars have no business in a person name either.
-    if (preg_match('/[\x00-\x1f]/', $name) === 1) {
-        return 'Names cannot contain control characters.';
     }
     // Characters, not bytes, to match the form's maxlength: a Hebrew
     // name is multi-byte UTF-8 (review #85). The stripped OS5 PHP may
