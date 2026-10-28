@@ -454,6 +454,24 @@ int main() {
             if (ps.id == c_p1) check(ps.name == "Ima", "name visible");
             if (ps.id == c_p2) check(ps.name.empty(), "cleared name is empty");
         }
+        // Raw SQL discrimination (mutant: NULLIF dropped -> '' stored):
+        // a cleared name must be NULL in clusters, not an empty string.
+        {
+            sqlite3* raw = nullptr;
+            check(sqlite3_open((data + "/index.db").c_str(), &raw) == SQLITE_OK,
+                  "raw name connection opens");
+            sqlite3_stmt* st = nullptr;
+            check(sqlite3_prepare_v2(raw,
+                      "SELECT name IS NULL FROM clusters WHERE id = ?",
+                      -1, &st, nullptr) == SQLITE_OK,
+                  "name-null query prepares");
+            sqlite3_bind_int64(st, 1, c_p2);
+            check(sqlite3_step(st) == SQLITE_ROW &&
+                      sqlite3_column_int64(st, 0) == 1,
+                  "cleared name is NULL, not an empty string");
+            sqlite3_finalize(st);
+            sqlite3_close(raw);
+        }
         check(!db.rename_cluster(999999, "x", err) && !err.empty(),
               "rename of unknown person refused with a reason");
 
@@ -494,11 +512,23 @@ int main() {
                   pl[0].id == c_a && pl[0].name == "Ima" && pl[0].face_count == 3,
               "unnamed target adopts the source name");
 
+        // Clear step (mutant): from the single 3-face cluster, recluster
+        // only 2 of its faces; the survivor keeps the id and the dropped
+        // face must NOT linger on it.
+        check(db.replace_clusters({{p1face, p2face}}, err),
+              "two-face recluster commits");
+        check(db.person_faces(c_a, pf, err) && pf.size() == 2,
+              "uncovered face left the surviving cluster");
+        check(db.replace_clusters({{aface, p1face, p2face}}, err),
+              "3-face state restored");
+
         // Split rule (review #51): a singleton group listed FIRST must not
         // steal the id+name from the larger fragment.
         check(db.replace_clusters({{aface}, {p1face, p2face}}, err),
               "split recluster commits");
         check(db.people_list(pl, err) && pl.size() == 2, "split leaves two people");
+        check(pl[0].face_count == 2 && pl[1].face_count == 1,
+              "people listed by face count descending");
         for (const auto& ps : pl) {
             if (ps.face_count == 2)
                 check(ps.id == c_a && ps.name == "Ima",
