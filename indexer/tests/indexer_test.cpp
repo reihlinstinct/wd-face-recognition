@@ -360,6 +360,274 @@ int main() {
               "pre-existing 0644 index.db tightened to 0600");
     }
 
+    // People methods (issue #50, PR 3a): clustering rewrite with global
+    // max-overlap id/name preservation, people_list/person_faces, rename,
+    // merge. One face row (a.jpg's) is already committed from the
+    // pipeline tests above.
+    long first_id = 0;  // Ima's cluster id, for any later block
+    {
+        // Queue two fresh photos and seed one face each.
+        write_file(root + "/p1.jpg", "p1-bytes");
+        write_file(root + "/p2.jpg", "p2-bytes");
+        long jobp = db.begin_job(root);
+        check(db.observe(jobp, root, root + "/p1.jpg", 8, 1000, err) == 1, "p1 queued");
+        check(db.observe(jobp, root, root + "/p2.jpg", 8, 1000, err) == 1, "p2 queued");
+        check(db.flush(), "seed batch committed");
+
+        std::vector<wfi::QueuedPhoto> pq;
+        check(db.queued_photos(100, pq, err), "seed queue readable");
+        long p1id = 0, p2id = 0;
+        int64_t p1sz = 0, p1mt = 0, p2sz = 0, p2mt = 0;
+        for (const auto& qq : pq) {
+            if (qq.path == root + "/p1.jpg") { p1id = qq.id; p1sz = qq.size; p1mt = qq.mtime; }
+            if (qq.path == root + "/p2.jpg") { p2id = qq.id; p2sz = qq.size; p2mt = qq.mtime; }
+        }
+        check(p1id > 0 && p2id > 0, "seed ids resolved");
+        auto seed_face = [&](long pid, int64_t sz, int64_t mt, float embv,
+                             const std::string& crop) {
+            wfi::FaceRow r;
+            r.bbox = "0,0,1,1";
+            r.embedding = {embv, embv + 1.0f};
+            r.crop_path = crop;
+            std::vector<std::string> oldc;
+            bool conflict = true;
+            check(db.replace_faces(pid, sz, mt, {r}, oldc, conflict, err) && !conflict,
+                  "seed face committed");
+        };
+        seed_face(p1id, p1sz, p1mt, 0.1f, "crops/p1_t1_f0.jpg");
+        seed_face(p2id, p2sz, p2mt, 0.2f, "crops/p2_t1_f0.jpg");
+
+        // all_face_embeddings: oldest first (ORDER BY mutant), exact
+        // float values (round-trip mutant), independent of leftover rows.
+        std::vector<wfi::ClusterFace> cf;
+        check(db.all_face_embeddings(cf, err), "all_face_embeddings reads");
+        check(cf.size() == 3, "all faces read (a.jpg leftover + two seeds)");
+        check(cf[0].id < cf[1].id && cf[1].id < cf[2].id, "faces ordered by id");
+        const long aface = cf[0].id, p1face = cf[1].id, p2face = cf[2].id;
+        check(cf[0].embedding.size() == 1 && cf[0].embedding[0] == 0.1f,
+              "leftover embedding round-trips exactly");
+        check(cf[1].embedding.size() == 2 &&
+                  cf[1].embedding[0] == 0.1f && cf[1].embedding[1] == 1.1f,
+              "seeded embedding values round-trip exactly");
+
+        // Validation refusals write nothing (review #51).
+        check(!db.replace_clusters({{p1face, p1face}}, err) &&
+                  err.find("duplicate") != std::string::npos,
+              "duplicate face id refused");
+        check(!db.replace_clusters({{999999}}, err) &&
+                  err.find("unknown") != std::string::npos,
+              "unknown face id refused");
+        std::vector<wfi::PersonSummary> pl;
+        check(db.people_list(pl, err) && pl.empty(),
+              "refusals leave no clusters behind");
+
+        // Three one-face groups: cover = the only face's crop.
+        check(db.replace_clusters({{aface}, {p1face}, {p2face}}, err),
+              "replace_clusters commits");
+        check(db.people_list(pl, err) && pl.size() == 3, "three people listed");
+        for (const auto& ps : pl) {
+            check(ps.face_count == 1, "one face per person");
+            check(!ps.cover_crop.empty(), "cover crop populated");
+        }
+        // person_faces contents + unknown id.
+        long c_a = 0, c_p1 = 0, c_p2 = 0;
+        for (const auto& ps : pl) {
+            if (ps.cover_crop == "crops/p1_t1_f0.jpg") c_p1 = ps.id;
+            else if (ps.cover_crop == "crops/p2_t1_f0.jpg") c_p2 = ps.id;
+            else c_a = ps.id;
+        }
+        check(c_a > 0 && c_p1 > 0 && c_p2 > 0, "cluster ids resolved");
+        std::vector<wfi::PersonFace> pf;
+        check(db.person_faces(c_p1, pf, err) && pf.size() == 1 &&
+                  pf[0].photo_path == root + "/p1.jpg" &&
+                  pf[0].crop_path == "crops/p1_t1_f0.jpg",
+              "person face carries photo path and crop");
+        check(db.person_faces(999999, pf, err) && pf.empty(),
+              "unknown person is empty, not an error");
+
+        // Rename + clear (NULLIF mutant) + unknown refusal.
+        check(db.rename_cluster(c_p1, "Ima", err), "rename commits");
+        check(db.rename_cluster(c_p2, "Temp", err), "second rename commits");
+        check(db.rename_cluster(c_p2, "", err), "empty name clears");
+        check(db.people_list(pl, err), "people_list after renames");
+        for (const auto& ps : pl) {
+            if (ps.id == c_p1) check(ps.name == "Ima", "name visible");
+            if (ps.id == c_p2) check(ps.name.empty(), "cleared name is empty");
+        }
+        // Raw SQL discrimination (mutant: NULLIF dropped -> '' stored):
+        // a cleared name must be NULL in clusters, not an empty string.
+        {
+            sqlite3* raw = nullptr;
+            check(sqlite3_open((data + "/index.db").c_str(), &raw) == SQLITE_OK,
+                  "raw name connection opens");
+            sqlite3_stmt* st = nullptr;
+            check(sqlite3_prepare_v2(raw,
+                      "SELECT name IS NULL FROM clusters WHERE id = ?",
+                      -1, &st, nullptr) == SQLITE_OK,
+                  "name-null query prepares");
+            sqlite3_bind_int64(st, 1, c_p2);
+            check(sqlite3_step(st) == SQLITE_ROW &&
+                      sqlite3_column_int64(st, 0) == 1,
+                  "cleared name is NULL, not an empty string");
+            sqlite3_finalize(st);
+            sqlite3_close(raw);
+        }
+        check(!db.rename_cluster(999999, "x", err) && !err.empty(),
+              "rename of unknown person refused with a reason");
+
+        // Recluster of the same groups keeps id AND name on each cluster.
+        check(db.replace_clusters({{aface}, {p1face}, {p2face}}, err),
+              "second recluster commits");
+        check(db.people_list(pl, err), "people_list after recluster");
+        for (const auto& ps : pl) {
+            if (ps.cover_crop == "crops/p1_t1_f0.jpg")
+                check(ps.id == c_p1 && ps.name == "Ima",
+                      "recluster preserves id and name");
+        }
+
+        // Merge into the NAMED cluster: target keeps its name; cover of a
+        // multi-face cluster is the lowest face id's crop (cover mutant);
+        // person_faces is ordered by photo path (ordering mutant).
+        check(!db.merge_clusters(c_p1, c_p1, err), "self-merge refused");
+        check(!db.merge_clusters(c_p1, 999999, err), "merge into unknown refused");
+        check(db.merge_clusters(c_p2, c_p1, err), "merge commits");
+        check(db.people_list(pl, err) && pl.size() == 2, "merged source leaves the list");
+        for (const auto& ps : pl)
+            if (ps.id == c_p1) {
+                check(ps.face_count == 2 && ps.name == "Ima",
+                      "named target keeps its name");
+                check(ps.cover_crop == "crops/p1_t1_f0.jpg",
+                      "cover is the lowest face id's crop");
+            }
+        check(db.person_faces(c_p1, pf, err) && pf.size() == 2 &&
+                  pf[0].photo_path < pf[1].photo_path,
+              "person faces ordered by photo path");
+        check(!db.rename_cluster(c_p2, "ghost", err),
+              "rename of a merged-away cluster refused");
+
+        // Name adoption: merging INTO an unnamed target moves the name
+        // with the faces instead of losing it (review #51).
+        check(db.merge_clusters(c_p1, c_a, err), "merge into unnamed commits");
+        check(db.people_list(pl, err) && pl.size() == 1 &&
+                  pl[0].id == c_a && pl[0].name == "Ima" && pl[0].face_count == 3,
+              "unnamed target adopts the source name");
+
+        // Clear step (mutant): from the single 3-face cluster, recluster
+        // only 2 of its faces; the survivor keeps the id and the dropped
+        // face must NOT linger on it.
+        check(db.replace_clusters({{p1face, p2face}}, err),
+              "two-face recluster commits");
+        check(db.person_faces(c_a, pf, err) && pf.size() == 2,
+              "uncovered face left the surviving cluster");
+        check(db.replace_clusters({{aface, p1face, p2face}}, err),
+              "3-face state restored");
+
+        // Split rule (review #51): a singleton group listed FIRST must not
+        // steal the id+name from the larger fragment.
+        check(db.replace_clusters({{aface}, {p1face, p2face}}, err),
+              "split recluster commits");
+        check(db.people_list(pl, err) && pl.size() == 2, "split leaves two people");
+        check(pl[0].face_count == 2 && pl[1].face_count == 1,
+              "people listed by face count descending");
+        for (const auto& ps : pl) {
+            if (ps.face_count == 2)
+                check(ps.id == c_a && ps.name == "Ima",
+                      "largest fragment keeps id and name");
+        }
+        check(db.person_faces(c_a, pf, err) && pf.size() == 2,
+              "largest fragment holds two faces");
+
+        // Clear step (mutant): a face no group covers ends at NULL rather
+        // than pointing at its old cluster. aface drops out here.
+        check(db.replace_clusters({{p1face, p2face}}, err),
+              "partial recluster commits");
+        check(db.person_faces(c_a, pf, err) && pf.size() == 2,
+              "uncovered face left the old cluster");
+        for (const auto& f : pf)
+            check(f.crop_path.find("p1_") != std::string::npos ||
+                      f.crop_path.find("p2_") != std::string::npos,
+                  "only covered faces remain");
+
+        // Empty groups are skipped, never inserted as 0-face rows.
+        check(db.replace_clusters({{}, {p1face, p2face, aface}}, err),
+              "empty-group recluster commits");
+        check(db.people_list(pl, err) && pl.size() == 1 && pl[0].face_count == 3,
+              "empty group adds no 0-face person");
+
+        // Merge-audit rows are deleted by a recluster (mutant): none may
+        // remain after the merges above.
+        {
+            sqlite3* raw = nullptr;
+            check(sqlite3_open((data + "/index.db").c_str(), &raw) == SQLITE_OK,
+                  "raw audit connection opens");
+            sqlite3_stmt* st = nullptr;
+            check(sqlite3_prepare_v2(raw,
+                      "SELECT count(*) FROM clusters WHERE merged_into IS NOT NULL",
+                      -1, &st, nullptr) == SQLITE_OK,
+                  "audit query prepares");
+            check(sqlite3_step(st) == SQLITE_ROW &&
+                      sqlite3_column_int64(st, 0) == 0,
+                  "no merged audit rows survive a recluster");
+            sqlite3_finalize(st);
+            // faces(cluster_id) must be indexed: people_list, person_faces
+            // and merge_clusters all filter on it (CodeRabbit #51).
+            check(sqlite3_prepare_v2(raw,
+                      "SELECT count(*) FROM sqlite_master"
+                      " WHERE type='index' AND name='idx_faces_cluster'",
+                      -1, &st, nullptr) == SQLITE_OK,
+                  "index query prepares");
+            check(sqlite3_step(st) == SQLITE_ROW &&
+                      sqlite3_column_int64(st, 0) == 1,
+                  "faces(cluster_id) is indexed");
+            sqlite3_finalize(st);
+            sqlite3_close(raw);
+        }
+
+        // person_faces ordering (mutant: ORDER BY f.id instead of
+        // p.path, f.id): queue z2.jpg BEFORE a2.jpg so the z-face gets the
+        // lower face id but the higher path; photo-path order must win.
+        write_file(root + "/z2.jpg", "z2-bytes");
+        write_file(root + "/a2.jpg", "a2-bytes");
+        long jobo = db.begin_job(root);
+        check(db.observe(jobo, root, root + "/z2.jpg", 8, 1000, err) == 1, "z2 queued");
+        check(db.observe(jobo, root, root + "/a2.jpg", 8, 1000, err) == 1, "a2 queued");
+        check(db.flush(), "ordering batch committed");
+        long z2id = 0, a2id = 0;
+        int64_t z2sz = 0, z2mt = 0, a2sz = 0, a2mt = 0;
+        check(db.queued_photos(100, pq, err), "ordering queue readable");
+        for (const auto& qq : pq) {
+            if (qq.path == root + "/z2.jpg") { z2id = qq.id; z2sz = qq.size; z2mt = qq.mtime; }
+            if (qq.path == root + "/a2.jpg") { a2id = qq.id; a2sz = qq.size; a2mt = qq.mtime; }
+        }
+        check(z2id > 0 && a2id > 0 && z2id < a2id, "z2 queued before a2");
+        seed_face(z2id, z2sz, z2mt, 0.3f, "crops/z2_t1_f0.jpg");
+        seed_face(a2id, a2sz, a2mt, 0.4f, "crops/a2_t1_f0.jpg");
+        long zface = 0, a2face = 0;
+        check(db.all_face_embeddings(cf, err), "faces re-read");
+        for (const auto& f : cf) {
+            if (f.photo_id == z2id) zface = f.id;
+            if (f.photo_id == a2id) a2face = f.id;
+        }
+        check(zface > 0 && a2face > 0 && zface < a2face,
+              "z-face id below a-face id");
+        check(db.replace_clusters({{aface, p1face, p2face}, {zface, a2face}}, err),
+              "ordering recluster commits");
+        check(db.people_list(pl, err), "people_list after ordering recluster");
+        long c_pair = 0;
+        for (const auto& ps : pl)
+            if (ps.cover_crop == "crops/z2_t1_f0.jpg") c_pair = ps.id;
+        check(c_pair > 0, "pair cluster resolved");
+        check(db.person_faces(c_pair, pf, err) && pf.size() == 2 &&
+                  pf[0].photo_path == root + "/a2.jpg" &&
+                  pf[1].photo_path == root + "/z2.jpg",
+              "person faces ordered by photo path, not face id");
+
+        // Ima's cluster id for any later block.
+        check(db.people_list(pl, err) && pl.size() == 2 && pl[0].name == "Ima",
+              "final state: one named person");
+        first_id = pl[0].id;
+    }
+
     if (fails > 0) {
         std::fprintf(stderr, "%d test(s) failed\n", fails);
         return 1;

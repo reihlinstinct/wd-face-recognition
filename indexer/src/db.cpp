@@ -1,5 +1,9 @@
 #include "db.h"
 
+#include <algorithm>
+#include <cstring>
+#include <map>
+#include <set>
 #include <sys/stat.h>
 
 namespace wfi {
@@ -37,6 +41,7 @@ CREATE TABLE IF NOT EXISTS faces(
   crop_path TEXT NOT NULL,
   cluster_id INTEGER REFERENCES clusters(id)
 );
+CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
 CREATE TABLE IF NOT EXISTS clusters(
   id INTEGER PRIMARY KEY,
   name TEXT,
@@ -414,6 +419,443 @@ bool Db::mark_failed(long photo_id, int64_t size, int64_t mtime,
     }
     sqlite3_finalize(st);
     return ok && !conflict;
+}
+
+bool Db::all_face_embeddings(std::vector<ClusterFace>& out, std::string& err) {
+    out.clear();
+    if (!flush()) {
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db_, "SELECT id, photo_id, embedding FROM faces ORDER BY id",
+                           -1, &st, nullptr) != SQLITE_OK) {
+        err = sqlite3_errmsg(db_);
+        return false;
+    }
+    while (true) {
+        const int rc = sqlite3_step(st);
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) {
+            err = sqlite3_errmsg(db_);
+            out.clear();
+            sqlite3_finalize(st);
+            return false;
+        }
+        ClusterFace f;
+        f.id = sqlite3_column_int64(st, 0);
+        f.photo_id = sqlite3_column_int64(st, 1);
+        const void* blob = sqlite3_column_blob(st, 2);
+        const int bytes = sqlite3_column_bytes(st, 2);
+        if (blob != nullptr && bytes > 0 && bytes % (int)sizeof(float) == 0) {
+            f.embedding.resize((size_t)bytes / sizeof(float));
+            std::memcpy(f.embedding.data(), blob, (size_t)bytes);
+        }
+        out.push_back(std::move(f));
+    }
+    sqlite3_finalize(st);
+    return true;
+}
+
+bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
+                          std::string& err) {
+    err.clear();
+    if (!flush()) {
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    // Duplicates are input validation: no DB read needed. One face in two
+    // groups would silently land in the last group holding it (review #51).
+    std::set<long> grouped;
+    for (const auto& g : groups)
+        for (const long fid : g)
+            if (!grouped.insert(fid).second) {
+                err = "duplicate face id in groups";
+                return false;
+            }
+    if (!exec("BEGIN IMMEDIATE", err)) return false;
+    // Unknown-id validation runs UNDER the write lock (CodeRabbit #51):
+    // before the transaction a concurrent replace_faces could delete and
+    // reinsert a face between this read and the assignment loop, making an
+    // assignment UPDATE silently match zero rows.
+    if (!grouped.empty()) {
+        std::set<long> known;
+        sqlite3_stmt* st = nullptr;
+        bool valid = false;
+        if (sqlite3_prepare_v2(db_, "SELECT id FROM faces", -1, &st,
+                               nullptr) != SQLITE_OK) {
+            err = sqlite3_errmsg(db_);
+        } else {
+            int rc;
+            while ((rc = sqlite3_step(st)) == SQLITE_ROW)
+                known.insert(sqlite3_column_int64(st, 0));
+            sqlite3_finalize(st);
+            if (rc != SQLITE_DONE) {
+                err = sqlite3_errmsg(db_);
+            } else {
+                valid = true;
+                for (const long fid : grouped)
+                    if (known.count(fid) == 0) {
+                        err = "unknown face id in groups";
+                        valid = false;
+                        break;
+                    }
+            }
+        }
+        if (!valid) {
+            std::string rb;
+            exec("ROLLBACK", rb);
+            return false;
+        }
+    }
+    bool ok = false;
+    do {
+        bool step_ok = true;
+        // Current face -> live cluster map, for id/name preservation.
+        std::map<long, long> face_cluster;
+        {
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db_,
+                    "SELECT id, cluster_id FROM faces WHERE cluster_id IS NOT NULL",
+                    -1, &st, nullptr) != SQLITE_OK) {
+                step_ok = false;
+            } else {
+                int rc;
+                while ((rc = sqlite3_step(st)) == SQLITE_ROW)
+                    face_cluster[sqlite3_column_int64(st, 0)] =
+                        sqlite3_column_int64(st, 1);
+                if (rc != SQLITE_DONE) step_ok = false;
+                sqlite3_finalize(st);
+            }
+        }
+        if (!step_ok) break;
+        // Global max-overlap assignment (review #51): score every
+        // (group, live cluster) pair by shared faces and claim pairs
+        // best-first, so the LARGEST fragment of a split cluster keeps
+        // its id and name regardless of the caller's group order.
+        struct Claim {
+            long overlap;
+            size_t gi;
+            long cid;
+        };
+        std::vector<Claim> claims;
+        for (size_t gi = 0; gi < groups.size(); ++gi) {
+            if (groups[gi].empty()) continue;  // never insert 0-face rows
+            std::map<long, long> overlap;
+            for (const long fid : groups[gi]) {
+                const auto it = face_cluster.find(fid);
+                if (it != face_cluster.end()) ++overlap[it->second];
+            }
+            for (const auto& kv : overlap)
+                claims.push_back({kv.second, gi, kv.first});
+        }
+        std::sort(claims.begin(), claims.end(),
+                  [](const Claim& a, const Claim& b) {
+                      if (a.overlap != b.overlap) return a.overlap > b.overlap;
+                      if (a.gi != b.gi) return a.gi < b.gi;
+                      return a.cid < b.cid;
+                  });
+        std::vector<long> group_cluster(groups.size(), 0);
+        {
+            std::set<long> used_clusters, used_groups;
+            for (const Claim& c : claims) {
+                if (used_groups.count(c.gi) != 0 ||
+                    used_clusters.count(c.cid) != 0)
+                    continue;
+                group_cluster[c.gi] = c.cid;
+                used_groups.insert(c.gi);
+                used_clusters.insert(c.cid);
+            }
+        }
+        std::set<long> reused;
+        for (const long cid : group_cluster)
+            if (cid != 0) reused.insert(cid);
+        // Clear assignments: faces no group covers end at NULL rather
+        // than pointing at a cluster they no longer belong to.
+        if (sqlite3_exec(db_, "UPDATE faces SET cluster_id = NULL", nullptr,
+                         nullptr, nullptr) != SQLITE_OK)
+            break;
+        // Drop live clusters no group kept.
+        {
+            std::vector<long> live_ids;
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db_,
+                    "SELECT id FROM clusters WHERE merged_into IS NULL",
+                    -1, &st, nullptr) != SQLITE_OK) {
+                step_ok = false;
+            } else {
+                int rc;
+                while ((rc = sqlite3_step(st)) == SQLITE_ROW)
+                    live_ids.push_back(sqlite3_column_int64(st, 0));
+                if (rc != SQLITE_DONE) step_ok = false;
+                sqlite3_finalize(st);
+            }
+            sqlite3_stmt* del = nullptr;
+            if (step_ok && sqlite3_prepare_v2(db_,
+                    "DELETE FROM clusters WHERE id = ?",
+                    -1, &del, nullptr) != SQLITE_OK)
+                step_ok = false;
+            if (step_ok) {
+                for (const long cid : live_ids) {
+                    if (reused.count(cid) != 0) continue;
+                    sqlite3_bind_int64(del, 1, cid);
+                    if (sqlite3_step(del) != SQLITE_DONE) {
+                        step_ok = false;
+                        break;
+                    }
+                    sqlite3_reset(del);
+                }
+            }
+            sqlite3_finalize(del);  // nullptr-safe
+        }
+        if (!step_ok) break;
+        // Merged-away rows are audit history; a fresh recluster supersedes
+        // them (their faces already moved to live clusters by the merge).
+        if (sqlite3_exec(db_, "DELETE FROM clusters WHERE merged_into IS NOT NULL",
+                         nullptr, nullptr, nullptr) != SQLITE_OK)
+            break;
+        for (size_t gi = 0; gi < groups.size() && step_ok; ++gi) {
+            if (groups[gi].empty()) continue;  // skipped, never inserted
+            if (group_cluster[gi] == 0) {
+                sqlite3_stmt* ins = nullptr;
+                if (sqlite3_prepare_v2(db_,
+                        "INSERT INTO clusters(name) VALUES(NULL)",
+                        -1, &ins, nullptr) != SQLITE_OK) {
+                    step_ok = false;
+                    break;
+                }
+                if (sqlite3_step(ins) != SQLITE_DONE) {
+                    sqlite3_finalize(ins);
+                    step_ok = false;
+                    break;
+                }
+                group_cluster[gi] = (long)sqlite3_last_insert_rowid(db_);
+                sqlite3_finalize(ins);
+            }
+            sqlite3_stmt* upd = nullptr;
+            if (sqlite3_prepare_v2(db_,
+                    "UPDATE faces SET cluster_id = ? WHERE id = ?",
+                    -1, &upd, nullptr) != SQLITE_OK) {
+                step_ok = false;
+                break;
+            }
+            for (const long fid : groups[gi]) {
+                sqlite3_bind_int64(upd, 1, group_cluster[gi]);
+                sqlite3_bind_int64(upd, 2, fid);
+                if (sqlite3_step(upd) != SQLITE_DONE) {
+                    step_ok = false;
+                    break;
+                }
+                sqlite3_reset(upd);
+            }
+            sqlite3_finalize(upd);
+        }
+        ok = step_ok;
+    } while (false);
+
+    if (ok) ok = exec("COMMIT", err);
+    if (!ok) {
+        // Capture SQLite's diagnostic BEFORE the rollback: ROLLBACK itself
+        // can overwrite the connection's error state (CodeRabbit #45).
+        if (err.empty()) err = sqlite3_errmsg(db_);
+        std::string rb;
+        exec("ROLLBACK", rb);  // best-effort; original error is the one to keep
+    }
+    return ok;
+}
+
+bool Db::people_list(std::vector<PersonSummary>& out, std::string& err) {
+    out.clear();
+    if (!flush()) {
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    sqlite3_stmt* st = nullptr;
+    const char* sql =
+        "SELECT c.id, COALESCE(c.name, ''),"
+        " (SELECT count(*) FROM faces f WHERE f.cluster_id = c.id),"
+        " COALESCE((SELECT f2.crop_path FROM faces f2"
+        "          WHERE f2.cluster_id = c.id ORDER BY f2.id LIMIT 1), '')"
+        " FROM clusters c WHERE c.merged_into IS NULL"
+        " ORDER BY 3 DESC, c.id";
+    if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+        err = sqlite3_errmsg(db_);
+        return false;
+    }
+    while (true) {
+        const int rc = sqlite3_step(st);
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) {
+            err = sqlite3_errmsg(db_);
+            out.clear();
+            sqlite3_finalize(st);
+            return false;
+        }
+        PersonSummary ps;
+        ps.id = sqlite3_column_int64(st, 0);
+        ps.name = (const char*)sqlite3_column_text(st, 1);
+        ps.face_count = sqlite3_column_int64(st, 2);
+        ps.cover_crop = (const char*)sqlite3_column_text(st, 3);
+        out.push_back(std::move(ps));
+    }
+    sqlite3_finalize(st);
+    return true;
+}
+
+bool Db::person_faces(long cluster_id, std::vector<PersonFace>& out,
+                      std::string& err) {
+    out.clear();
+    if (!flush()) {
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    sqlite3_stmt* st = nullptr;
+    const char* sql =
+        "SELECT f.id, f.bbox, f.crop_path, p.path"
+        " FROM faces f JOIN photos p ON p.id = f.photo_id"
+        " WHERE f.cluster_id = ? ORDER BY p.path, f.id";
+    if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+        err = sqlite3_errmsg(db_);
+        return false;
+    }
+    sqlite3_bind_int64(st, 1, cluster_id);
+    while (true) {
+        const int rc = sqlite3_step(st);
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) {
+            err = sqlite3_errmsg(db_);
+            out.clear();
+            sqlite3_finalize(st);
+            return false;
+        }
+        PersonFace pf;
+        pf.id = sqlite3_column_int64(st, 0);
+        pf.bbox = (const char*)sqlite3_column_text(st, 1);
+        pf.crop_path = (const char*)sqlite3_column_text(st, 2);
+        pf.photo_path = (const char*)sqlite3_column_text(st, 3);
+        out.push_back(std::move(pf));
+    }
+    sqlite3_finalize(st);
+    return true;
+}
+
+bool Db::rename_cluster(long cluster_id, const std::string& name,
+                        std::string& err) {
+    err.clear();
+    if (!flush()) {
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db_,
+            "UPDATE clusters SET name = NULLIF(?, '')"
+            " WHERE id = ? AND merged_into IS NULL",
+            -1, &st, nullptr) != SQLITE_OK) {
+        err = sqlite3_errmsg(db_);
+        return false;
+    }
+    sqlite3_bind_text(st, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 2, cluster_id);
+    const bool ok = sqlite3_step(st) == SQLITE_DONE;
+    const bool found = ok && sqlite3_changes(db_) == 1;
+    sqlite3_finalize(st);
+    if (!ok) {
+        err = sqlite3_errmsg(db_);
+        return false;
+    }
+    if (!found) {
+        err = "no such live person";
+        return false;
+    }
+    return true;
+}
+
+bool Db::merge_clusters(long from, long to, std::string& err) {
+    err.clear();
+    if (from == to) {
+        err = "cannot merge a person into itself";
+        return false;
+    }
+    if (!flush()) {
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    if (!exec("BEGIN IMMEDIATE", err)) return false;
+    bool ok = false;
+    do {
+        // Both ids must name LIVE clusters before anything moves.
+        long live = 0;
+        {
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db_,
+                    "SELECT count(*) FROM clusters"
+                    " WHERE id IN (?, ?) AND merged_into IS NULL",
+                    -1, &st, nullptr) != SQLITE_OK)
+                break;
+            sqlite3_bind_int64(st, 1, from);
+            sqlite3_bind_int64(st, 2, to);
+            if (sqlite3_step(st) == SQLITE_ROW)
+                live = sqlite3_column_int64(st, 0);
+            else {
+                sqlite3_finalize(st);
+                break;
+            }
+            sqlite3_finalize(st);
+        }
+        if (live != 2) {
+            err = "no such live person";
+            break;
+        }
+        {
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db_,
+                    "UPDATE faces SET cluster_id = ? WHERE cluster_id = ?",
+                    -1, &st, nullptr) != SQLITE_OK)
+                break;
+            sqlite3_bind_int64(st, 1, to);
+            sqlite3_bind_int64(st, 2, from);
+            ok = sqlite3_step(st) == SQLITE_DONE;
+            sqlite3_finalize(st);
+            if (!ok) break;
+        }
+        // An unnamed target adopts the source's name rather than losing
+        // it with the source row (review #51); a named target keeps its
+        // own name.
+        {
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db_,
+                    "UPDATE clusters SET name = (SELECT name FROM clusters WHERE id = ?)"
+                    " WHERE id = ? AND (name IS NULL OR name = '')",
+                    -1, &st, nullptr) != SQLITE_OK) {
+                ok = false;
+                break;
+            }
+            sqlite3_bind_int64(st, 1, from);
+            sqlite3_bind_int64(st, 2, to);
+            ok = sqlite3_step(st) == SQLITE_DONE;
+            sqlite3_finalize(st);
+            if (!ok) break;
+        }
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(db_,
+                "UPDATE clusters SET merged_into = ? WHERE id = ?",
+                -1, &st, nullptr) != SQLITE_OK) {
+            ok = false;
+            break;
+        }
+        sqlite3_bind_int64(st, 1, to);
+        sqlite3_bind_int64(st, 2, from);
+        ok = sqlite3_step(st) == SQLITE_DONE;
+        sqlite3_finalize(st);
+    } while (false);
+
+    if (ok) ok = exec("COMMIT", err);
+    if (!ok) {
+        if (err.empty()) err = sqlite3_errmsg(db_);
+        std::string rb;
+        exec("ROLLBACK", rb);
+    }
+    return ok;
 }
 
 }  // namespace wfi

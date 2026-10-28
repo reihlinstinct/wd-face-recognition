@@ -168,7 +168,9 @@ Installing and living with the app must be simple for a non-technical owner:
 |      activity, loadavg); pause/resume; schedule window (01:00-07:00)  |
 |                                                                       |
 |  clustering service                                                   |
-|    - agglomerative clustering on embeddings, merge-on-name            |
+|    - union-find over cosine-similar embedding pairs (0.5 cut); full   |
+|      recluster reuses stored embeddings and keeps ids/names by global |
+|      max-overlap, so a split's largest fragment keeps its identity    |
 |    - "people" table; unknown clusters surface as "Person 7"           |
 |                                                                       |
 |  local web UI (mobile-first, no external CDN/fonts)                   |
