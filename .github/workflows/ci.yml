@@ -72,6 +72,10 @@ jobs:
       - name: Session auth tests (PHP)
         # PIN-rotation binding + HTTPS detection (CodeRabbit PR #42).
         run: php apkg/web/tests/auth_test.php
+      - name: Output-folder settings tests (PHP)
+        # Configurable results folder: validation, migration, cleanup
+        # safety contract (issue #43).
+        run: php apkg/web/tests/settings_test.php
   indexer-test:
     # wdf_indexer skeleton (issue #40): mtime-delta walk + SQLite index.
     runs-on: ubuntu-latest
