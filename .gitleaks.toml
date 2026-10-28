@@ -1,0 +1,10 @@
+# Extend the default rules (CodeRabbit: without this, a repo config
+# REPLACES the built-in detector set and real secrets would stop being
+# scanned). The allowlist only covers indexer/third_party: the SQLite
+# amalgamation fetched by indexer/get-sqlite.sh (sha256-pinned) trips the
+# generic-api-key rule on sqlite3_api->... struct accesses - not secrets.
+[extend]
+useDefault = true
+
+[allowlist]
+paths = ['''^indexer/third_party/.*''']  # anchored: nested lookalikes stay scanned

@@ -72,6 +72,29 @@ jobs:
       - name: Session auth tests (PHP)
         # PIN-rotation binding + HTTPS detection (CodeRabbit PR #42).
         run: php apkg/web/tests/auth_test.php
+  indexer-test:
+    # wdf_indexer skeleton (issue #40): mtime-delta walk + SQLite index.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false  # supply-chain hygiene (CodeRabbit #41)
+      - name: Fetch pinned SQLite amalgamation
+        run: indexer/get-sqlite.sh
+      - name: Build indexer + tests
+        run: |
+          gcc -O2 -c indexer/third_party/sqlite3.c -o /tmp/sqlite3.o
+          g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
+            indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \
+            indexer/tests/indexer_test.cpp /tmp/sqlite3.o -lpthread -ldl -o /tmp/wfi_test
+          g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
+            indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \
+            indexer/src/main.cpp /tmp/sqlite3.o -lpthread -ldl -o /tmp/wdf_indexer
+      - name: Unit tests (C++)
+        run: /tmp/wfi_test
+      - name: End-to-end test (Python + real binary + real DB)
+        run: python3 indexer/tests/test_indexer.py /tmp/wdf_indexer
+
   security:
     runs-on: ubuntu-latest
     steps:
