@@ -162,6 +162,35 @@ function wdf_post_id(string $raw): ?int
     return $id > 0 ? $id : null;
 }
 
+// Rename request gate (issue #84): distinct messages so the user can
+// tell a bad id from an empty name - the CLI refuses to clear a name,
+// so the page rejects it before the exec.
+function wdf_rename_request_error(string $idRaw, string $nameRaw): string
+{
+    if (wdf_post_id($idRaw) === null) {
+        return 'Bad rename request.';
+    }
+    $name = trim($nameRaw);
+    if ($name === '') {
+        return 'Enter a name for this person first.';
+    }
+    // Characters, not bytes, to match the form's maxlength: a Hebrew
+    // name is multi-byte UTF-8 (review #85). The stripped OS5 PHP may
+    // lack mbstring; the strlen fallback then counts BYTES and the
+    // message must say so - never claim characters we did not count.
+    if (function_exists('mb_strlen')) {
+        $len = mb_strlen($name, 'UTF-8');
+        $unit = 'characters';
+    } else {
+        $len = strlen($name);
+        $unit = 'bytes';
+    }
+    if ($len > 128) {
+        return 'That name is too long - 128 ' . $unit . ' maximum.';
+    }
+    return '';
+}
+
 // Merge request validation (review #58): two different valid ids plus the
 // explicit cannot-be-undone confirmation. Returns the error message, or
 // '' when the request may proceed.

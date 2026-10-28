@@ -43,8 +43,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($action === 'rename') {
             $id = wdf_post_id((string)($_POST['id'] ?? ''));
             $name = trim((string)($_POST['name'] ?? ''));
-            if ($id === null || strlen($name) > 128) {
-                $msg = 'Bad rename request.';
+            $renameErr = wdf_rename_request_error((string)($_POST['id'] ?? ''),
+                (string)($_POST['name'] ?? ''));
+            if ($renameErr !== '') {
+                $msg = $renameErr;
             } else {
                 [$rc, $out] = wdf_faces_call($appDir,
                     ['rename', '--config', $configPath,
