@@ -304,6 +304,16 @@ photo share:
   vault link, never in chat.
 - Uninstall removes binaries; the face DB, settings and reports share are kept
   (explicit "remove data too" option deletes all three) - see 2c.
+- On-device config (issue #56): init.sh writes wfi.conf once on the
+  PERSISTENT _conf path (${APP_NAME}_conf, survives uninstall per 2c)
+  and symlinks it to ${APP_PATH}/wfi.conf, where the pages and CLI
+  look for it - an uninstall removes only the link, never the owner's
+  chosen roots (review #87). data_dir is on the same persistent path;
+  models_dir points at the staged models. roots is EMPTY by default -
+  owner rule: nothing is scanned until the owner lists share paths in
+  wfi.conf (example in the file's comment). Until then the people
+  pages show their generic "could not read the face index" state.
+  WDF_WFI_CONFIG can point elsewhere for tests.
 
 ### Metadata write-back (XMP) — opt-in
 Once a cluster is named, the app can record the name in standard photo metadata so it

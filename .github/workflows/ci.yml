@@ -86,6 +86,10 @@ jobs:
         # People list/person/crop backend: config parsing, JSON shape,
         # escaping, PIN-gated crop serving (issue #50).
         run: php apkg/web/tests/people_test.php
+      - name: init.sh wfi.conf materialization (issue #56)
+        # Four sandbox states: fresh default, hand-made config adoption,
+        # both-exist backup, persistent-only idempotency.
+        run: sh apkg/tests/init_conf_test.sh
   indexer-test:
     # wdf_indexer skeleton (issue #40): mtime-delta walk + SQLite index.
     runs-on: ubuntu-latest
