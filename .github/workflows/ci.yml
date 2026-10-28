@@ -106,10 +106,18 @@ jobs:
           g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
             indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \
             indexer/src/main.cpp /tmp/sqlite3.o -lpthread -ldl -o /tmp/wdf_indexer
+          g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
+            indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \
+            indexer/src/cropreserve.cpp indexer/src/people.cpp \
+            pipeline/src/cluster.cpp -I pipeline/src -I indexer/src \
+            indexer/src/faces_main.cpp indexer/tests/process_stub.cpp \
+            /tmp/sqlite3.o -lpthread -ldl -o /tmp/wdf_faces_cli
       - name: Unit tests (C++)
         run: /tmp/wfi_test
       - name: End-to-end test (Python + real binary + real DB)
         run: python3 indexer/tests/test_indexer.py /tmp/wdf_indexer
+      - name: wdf_faces CLI dispatch test (stub process stage)
+        run: python3 indexer/tests/test_faces_cli.py /tmp/wdf_faces_cli
 
   security:
     runs-on: ubuntu-latest
