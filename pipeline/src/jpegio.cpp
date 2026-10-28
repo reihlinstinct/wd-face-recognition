@@ -116,6 +116,9 @@ bool encode_jpeg(const unsigned char* rgb, int w, int h, const std::string& path
         std::fprintf(stderr, "jpeg encode error for %s: %s\n", path.c_str(), jerr.msg);
         if (created) jpeg_destroy_compress(&cinfo);
         std::fclose(f);
+        // Never leave a partial crop on disk: the index would store a path
+        // to a truncated file (CodeRabbit #45).
+        std::remove(path.c_str());
         return false;
     }
     jpeg_create_compress(&cinfo);
@@ -134,7 +137,16 @@ bool encode_jpeg(const unsigned char* rgb, int w, int h, const std::string& path
     }
     jpeg_finish_compress(&cinfo);
     jpeg_destroy_compress(&cinfo);
-    std::fclose(f);
+    // stdio may still hold buffered data: the real write happens in fclose,
+    // and its failure (full disk, quota) must not go unnoticed - a stored
+    // crop path must point at a complete file (CodeRabbit #45).
+    const bool stream_bad = std::ferror(f) != 0;
+    const bool close_bad = std::fclose(f) != 0;
+    if (stream_bad || close_bad) {
+        std::fprintf(stderr, "jpeg flush/close failed for %s\n", path.c_str());
+        std::remove(path.c_str());
+        return false;
+    }
     return true;
 }
 

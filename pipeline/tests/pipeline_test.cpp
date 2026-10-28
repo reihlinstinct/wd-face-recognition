@@ -1,9 +1,13 @@
 // Pipeline unit tests (issue #40, PR 2): alignment transform recovery,
 // chip landmark placement, degenerate-input handling, cosine, union-find,
 // and a libjpeg encode/decode roundtrip. No ncnn needed. Run: ./pipeline_test
+#include <csignal>
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <vector>
 
 #include <jpeglib.h>
 
@@ -146,9 +150,62 @@ int main() {
                 wfp::RgbImage prog = wfp::decode_jpeg(p, &reason, 1000);
                 check(prog.pixels.empty() && reason == "too large",
                       "progressive oversized refused pre-decompress");
+                // Prove the refusal happens BEFORE decompression starts
+                // (CodeRabbit #45): truncate the file right after the SOS
+                // header and append an invalid marker, so actually
+                // decompressing would hard-error with "decode". Over the
+                // cap we must still get "too large" - proving the scan
+                // data was never touched. Under the cap the same file must
+                // fail with "decode" (control: the trap works).
+                std::string bytes;
+                {
+                    FILE* rf = std::fopen(p.c_str(), "rb");
+                    fseek(rf, 0, SEEK_END);
+                    long sz = ftell(rf);
+                    fseek(rf, 0, SEEK_SET);
+                    bytes.resize((size_t)sz);
+                    if (fread(&bytes[0], 1, (size_t)sz, rf) != (size_t)sz) bytes.clear();
+                    fclose(rf);
+                }
+                size_t sos = bytes.find("\xff\xda");
+                check(sos != std::string::npos, "progressive fixture has SOS");
+                if (sos != std::string::npos) {
+                    const size_t seglen = ((unsigned char)bytes[sos + 2] << 8) |
+                                          (unsigned char)bytes[sos + 3];
+                    bytes.resize(sos + 2 + seglen);
+                    bytes += "\xff\xde";  // undefined marker: hard error if read
+                    FILE* wf = std::fopen(p.c_str(), "wb");
+                    fwrite(bytes.data(), 1, bytes.size(), wf);
+                    fclose(wf);
+                    wfp::RgbImage trapped = wfp::decode_jpeg(p, &reason, 1000);
+                    check(trapped.pixels.empty() && reason == "too large",
+                          "oversized refused before touching corrupt scan data");
+                    wfp::RgbImage ctrl = wfp::decode_jpeg(p, &reason, 100000);
+                    check(ctrl.pixels.empty() && reason == "decode",
+                          "control: same file decompresses into the trap");
+                }
                 std::remove(p.c_str());
             }
         }
+    }
+
+    // encode_jpeg must fail (and remove the partial file) when the final
+    // flush cannot complete (CodeRabbit #45). RLIMIT_FSIZE makes the
+    // process's writes past 1KB fail with EFBIG; SIGXFSZ is ignored so the
+    // write returns an error instead of killing the test.
+    {
+        const std::string p = "/tmp/wfp-bigwrite.jpg";
+        std::vector<unsigned char> big(300 * 300 * 3, 200);
+        std::signal(SIGXFSZ, SIG_IGN);
+        struct rlimit old_rl;
+        getrlimit(RLIMIT_FSIZE, &old_rl);
+        struct rlimit small_rl { 1024, old_rl.rlim_max };
+        check(setrlimit(RLIMIT_FSIZE, &small_rl) == 0, "file-size limit set");
+        check(!wfp::encode_jpeg(big.data(), 300, 300, p),
+              "encode over the file-size limit fails");
+        setrlimit(RLIMIT_FSIZE, &old_rl);
+        struct stat st;
+        check(stat(p.c_str(), &st) != 0, "failed encode leaves no partial file");
     }
 
     if (fails == 0) std::printf("pipeline tests: all passed\n");
