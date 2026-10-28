@@ -641,6 +641,8 @@ int main() {
         check(!wfi::parse_threshold("", th), "empty refused");
         check(!wfi::parse_threshold("nan", th), "NaN refused");
         check(!wfi::parse_threshold("inf", th), "inf refused");
+        check(!wfi::parse_threshold("1e-400", th),
+              "underflow (ERANGE) refused, not silently 0");
         check(!wfi::parse_threshold("1.5", th), "above range refused");
         check(!wfi::parse_threshold("-2", th), "below range refused");
     }
