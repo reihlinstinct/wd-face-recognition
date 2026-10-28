@@ -28,10 +28,22 @@ self_check "${APP_PATH}/bin/wdf_demo"
 # it needs the authenticated WD dashboard (or SMB) - the same independent
 # channel as the TLS fingerprint - so a bare LAN browser cannot run the demo.
 PIN_FILE="/shares/facerecog-reports/demo-pin.txt"
-if [ ! -s "${PIN_FILE}" ]; then
+# Validate shape, not just non-emptiness: a partial write (1-11 chars) or
+# non-hex content must trigger regeneration, and the generated PIN must land
+# as exactly 12 lowercase hex chars. busybox grep supports -q -x -E.
+pin_valid() { grep -qxE '[0-9a-f]{12}' "${PIN_FILE}" 2>/dev/null; }
+if ! pin_valid; then
 	mkdir -p /shares/facerecog-reports
-	dd if=/dev/urandom bs=6 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' > "${PIN_FILE}"
-	log "demo PIN written to ${PIN_FILE}"
+	# busybox-safe generator (tr/head only): the previous dd|od -An -tx1
+	# pipeline left a 0-byte PIN on the PR4100 - the redirect truncates the
+	# file before the pipeline runs, and busybox od rejected the flags.
+	tr -dc '0-9a-f' < /dev/urandom | head -c 12 > "${PIN_FILE}"
+	if pin_valid; then
+		log "demo PIN written to ${PIN_FILE}"
+	else
+		log "ERROR: failed to generate demo PIN at ${PIN_FILE}"
+		rc=1
+	fi
 fi
 
 if [ "${rc}" -ne 0 ]; then
