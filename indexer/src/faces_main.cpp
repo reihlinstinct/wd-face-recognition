@@ -109,6 +109,10 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "rename needs --id N\n");
                 return 2;
             }
+            if (name_arg.empty()) {  // an empty name would silently clear it
+                std::fprintf(stderr, "rename needs --name NAME\n");
+                return 2;
+            }
             if (!db.rename_cluster(id_arg, name_arg, err)) {
                 std::fprintf(stderr, "%s\n", err.c_str());
                 return 1;

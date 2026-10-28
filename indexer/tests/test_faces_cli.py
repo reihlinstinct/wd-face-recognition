@@ -128,6 +128,16 @@ cur.execute(
 db.commit()
 db.close()
 
+# rename without --name is refused before it can clear the live name
+# (CodeRabbit #76).
+r = run("rename", "--config", conf, "--id", str(old_id))
+check(r.returncode == 2 and "needs --name" in r.stderr,
+      "rename without --name refused")
+r = run("people", "--config", conf)
+people = json.loads(r.stdout) if r.returncode == 0 else []
+still = [p for p in people if p["id"] == old_id]
+check(still and still[0]["name"] == "Old", "refused rename keeps the name")
+
 r = run("rename", "--config", conf, "--id", str(old_id), "--name", "Dana")
 check(r.returncode == 0, "rename of a live cluster succeeds")
 r = run("people", "--config", conf)
