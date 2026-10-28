@@ -19,6 +19,7 @@
 #include "../src/config.h"
 #include "../src/cropreserve.h"
 #include "../src/db.h"
+#include "../src/people.h"
 #include "../src/walk.h"
 
 static int fails = 0;
@@ -364,7 +365,7 @@ int main() {
     // max-overlap id/name preservation, people_list/person_faces, rename,
     // merge. One face row (a.jpg's) is already committed from the
     // pipeline tests above.
-    long first_id = 0;  // Ima's cluster id, for any later block
+    long first_id = 0;  // Ima's cluster id, reused by the recluster tests
     {
         // Queue two fresh photos and seed one face each.
         write_file(root + "/p1.jpg", "p1-bytes");
@@ -600,8 +601,8 @@ int main() {
             if (qq.path == root + "/a2.jpg") { a2id = qq.id; a2sz = qq.size; a2mt = qq.mtime; }
         }
         check(z2id > 0 && a2id > 0 && z2id < a2id, "z2 queued before a2");
-        seed_face(z2id, z2sz, z2mt, 0.3f, "crops/z2_t1_f0.jpg");
-        seed_face(a2id, a2sz, a2mt, 0.4f, "crops/a2_t1_f0.jpg");
+        seed_face(z2id, z2sz, z2mt, -0.9f, "crops/z2_t1_f0.jpg");
+        seed_face(a2id, a2sz, a2mt, -0.95f, "crops/a2_t1_f0.jpg");
         long zface = 0, a2face = 0;
         check(db.all_face_embeddings(cf, err), "faces re-read");
         for (const auto& f : cf) {
@@ -626,6 +627,81 @@ int main() {
         check(db.people_list(pl, err) && pl.size() == 2 && pl[0].name == "Ima",
               "final state: one named person");
         first_id = pl[0].id;
+    }
+
+    // recluster (issue #50, PR 3b): union-find over stored embeddings at
+    // cosine > 0.5. Four controlled faces: two near-identical pairs plus
+    // an orthogonal one; the five faces from the people tests above ride
+    // along (p1/p2 and z2/a2 each merge into their own pair, the 1-dim
+    // one stays alone via the size guard).
+    {
+        write_file(root + "/q1.jpg", "q1-bytes");
+        write_file(root + "/q2.jpg", "q2-bytes");
+        write_file(root + "/q3.jpg", "q3-bytes");
+        write_file(root + "/q4.jpg", "q4-bytes");
+        long jobr = db.begin_job(root);
+        for (const char* n : {"q1", "q2", "q3", "q4"})
+            check(db.observe(jobr, root, root + "/" + n + ".jpg", 8, 1000, err) == 1,
+                  "recluster photo queued");
+        check(db.flush(), "recluster seed batch committed");
+        std::vector<wfi::QueuedPhoto> rq;
+        check(db.queued_photos(200, rq, err), "recluster queue readable");
+        // 3-dim seeds: orthogonal to the 2-dim people-test embeddings, so
+        // only the intended pairs unite (the size guard skips cross pairs).
+        auto seed2 = [&](const char* name, float e0, float e1, float e2) {
+            for (const auto& qq : rq) {
+                if (qq.path != root + "/" + name + ".jpg") continue;
+                wfi::FaceRow r;
+                r.bbox = "0,0,1,1";
+                r.embedding = {e0, e1, e2};
+                r.crop_path = std::string("crops/") + name + "_t1_f0.jpg";
+                std::vector<std::string> oldc;
+                bool conflict = true;
+                check(db.replace_faces(qq.id, qq.size, qq.mtime, {r}, oldc,
+                                       conflict, err) && !conflict,
+                      "recluster face committed");
+            }
+        };
+        seed2("q1", 1.0f, 0.0f, 0.0f);
+        seed2("q2", 0.98f, 0.02f, 0.0f);  // ~identical direction to q1
+        seed2("q3", 0.0f, 1.0f, 0.0f);
+        seed2("q4", 0.0f, 0.98f, 0.02f);  // ~identical direction to q3
+
+        wfi::ClusterCounts cc;
+        check(wfi::recluster(db, 0.5, cc, err), "recluster commits");
+        check(cc.faces == 9, "all faces clustered");
+        // q1+q2, q3+q4, p1+p2 (near-parallel 2-dim), and the 1-dim
+        // singleton (size guard keeps it out of every pair).
+        check(cc.people == 5, "expected group count");
+        check(cc.singletons == 1, "only the dimension-skewed face is alone");
+
+        // Cluster membership via cover crops (cover = first face's crop).
+        std::vector<wfi::PersonSummary> rp;
+        check(db.people_list(rp, err), "people_list after recluster");
+        auto cluster_of = [&](const char* crop) -> long {
+            for (const auto& ps : rp) {
+                std::vector<wfi::PersonFace> rf;
+                check(db.person_faces(ps.id, rf, err), "person faces readable");
+                for (const auto& f : rf)
+                    if (f.crop_path == crop) return ps.id;
+            }
+            return 0;
+        };
+        const long c_q1 = cluster_of("crops/q1_t1_f0.jpg");
+        check(c_q1 > 0 && c_q1 == cluster_of("crops/q2_t1_f0.jpg"),
+              "near-identical pair shares a person");
+        check(cluster_of("crops/q3_t1_f0.jpg") == cluster_of("crops/q4_t1_f0.jpg"),
+              "second pair shares a person");
+        check(cluster_of("crops/q3_t1_f0.jpg") != c_q1,
+              "orthogonal pairs stay apart");
+        // Name preservation through recluster: the p1/p2 pair carries
+        // Ima's id from the people tests above.
+        check(cluster_of("crops/p1_t1_f0.jpg") == first_id,
+              "recluster keeps the named cluster on its largest fragment");
+        check(db.people_list(rp, err) && rp.size() == 5, "five people listed");
+        bool ima_named = false;
+        for (const auto& ps : rp) if (ps.id == first_id && ps.name == "Ima") ima_named = true;
+        check(ima_named, "name survives the full recluster");
     }
 
     if (fails > 0) {
