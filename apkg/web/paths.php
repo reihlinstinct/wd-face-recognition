@@ -144,3 +144,10 @@ function wdf_normalize_photos_dir(string $input, string $allowedPrefix = '/share
     }
     return null;
 }
+
+// True when $path is $dir itself or a descendant of it. Both arguments are
+// already-normalized absolute paths (see wdf_normalize_photos_dir).
+function wdf_path_is_within(string $path, string $dir): bool
+{
+    return $path === $dir || strpos($path, $dir . '/') === 0;
+}

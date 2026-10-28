@@ -82,6 +82,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // slashes; guards apply to the final resolved path.
             $msg = 'Folder not found on this NAS: ' . htmlspecialchars($photos, ENT_QUOTES, 'UTF-8')
                 . ' - paste the path as shown in the file manager, spaces are fine, no backslashes needed.';
+        } elseif (wdf_path_is_within($photosDir, $demoOut)) {
+            // demo-out is wiped before every run: using it (or a subfolder)
+            // as the source would delete the input photos (CodeRabbit PR #34).
+            $msg = 'That folder is the demo output folder and is wiped before each run'
+                . ' - choose a different photo folder.';
         } else {
             if (!is_dir($demoOut)) {
                 @mkdir($demoOut, 0777, true);
@@ -106,21 +111,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $msg = 'A demo run is already in progress - its progress is shown below.';
                 } else {
                     // Fixed output path: previous demo output is replaced,
-                    // never mixed (same guarantee the sync runner had).
-                    exec('rm -rf ' . escapeshellarg($demoOut));
-                    @mkdir($demoOut, 0777, true);
-                    // Async launch (issue #33): detached background job,
-                    // output to run.log; survives the browser disconnecting.
-                    $ok = wdf_run_demo_async([$demoBin, $photosDir, $modelsDir, $demoOut, '2'], $runLog);
-                    if ($ok) {
-                        // Hold the lock until the wrapper's start= marker is
-                        // visible, so a concurrent POST sees a running state.
-                        $deadline = microtime(true) + 3.0;
-                        while (microtime(true) < $deadline) {
-                            if (wdf_demo_status($runLog)['start'] !== null) {
-                                break;
+                    // never mixed (same guarantee the sync runner had). A
+                    // failed cleanup must abort the launch: a leftover
+                    // run.log could feed a previous run's exit marker to
+                    // the status parser (CodeRabbit PR #34).
+                    exec('rm -rf ' . escapeshellarg($demoOut) . ' 2>/dev/null', $rmLines, $rmRc);
+                    if ($rmRc !== 0 || !@mkdir($demoOut, 0777, true)) {
+                        $msg = 'Could not reset the demo output folder - nothing was started.'
+                            . ' Check that the facerecog-reports share is writable.';
+                    } else {
+                        // Async launch (issue #33): detached background job,
+                        // output to run.log; survives the browser disconnecting.
+                        $ok = wdf_run_demo_async([$demoBin, $photosDir, $modelsDir, $demoOut, '2'], $runLog);
+                        if ($ok) {
+                            // Hold the lock until the wrapper's start= marker
+                            // is visible, so a concurrent POST sees running.
+                            $deadline = microtime(true) + 3.0;
+                            while (microtime(true) < $deadline) {
+                                if (wdf_demo_status($runLog)['start'] !== null) {
+                                    break;
+                                }
+                                usleep(100000);
                             }
-                            usleep(100000);
                         }
                     }
                 }

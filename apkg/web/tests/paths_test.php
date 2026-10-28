@@ -69,6 +69,18 @@ check(!file_exists('/tmp/wdf-pwned'), 'no injection side effect');
 $quoted = escapeshellarg($prefix . "it's a dir");
 check(strpos($quoted, "'") === 0 && substr_count($quoted, "'\\''") === 1, 'escapeshellarg quotes safely');
 
+// wdf_path_is_within: the demo-out source guard (CodeRabbit PR #34).
+check(wdf_path_is_within('/shares/facerecog-reports/demo-out', '/shares/facerecog-reports/demo-out'),
+      'demo-out itself is within demo-out');
+check(wdf_path_is_within('/shares/facerecog-reports/demo-out/crops', '/shares/facerecog-reports/demo-out'),
+      'a demo-out subfolder is within demo-out');
+check(!wdf_path_is_within('/shares/facerecog-reports/demo-outside', '/shares/facerecog-reports/demo-out'),
+      'a sibling with a shared name prefix is NOT within demo-out');
+check(!wdf_path_is_within('/shares/facerecog-reports', '/shares/facerecog-reports/demo-out'),
+      'the parent share is not within demo-out');
+check(!wdf_path_is_within('/shares/Public/photos', '/shares/facerecog-reports/demo-out'),
+      'an unrelated folder is not within demo-out');
+
 if ($fails > 0) {
     fwrite(STDERR, "{$fails} test(s) failed\n");
     exit(1);
