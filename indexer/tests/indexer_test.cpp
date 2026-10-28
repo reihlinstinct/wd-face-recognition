@@ -820,6 +820,47 @@ int main() {
         check(ima_named, "name survives the full recluster");
     }
 
+    // JSON for the PHP pages (issue #50, PR 3c): escaping and shape.
+    {
+        check(wfi::json_escape("plain") == "plain", "plain text untouched");
+        check(wfi::json_escape("a\"b\\c") == "a\\\"b\\\\c",
+              "quotes and backslashes escaped");
+        check(wfi::json_escape("l1\nl2\t!") == "l1\\nl2\\t!",
+              "control chars escaped");
+        // Hebrew passes through as UTF-8 bytes (\xD7\x90 = aleph).
+        check(wfi::json_escape("\xD7\x90\xD7\x9E\xD7\x90") ==
+                  "\xD7\x90\xD7\x9E\xD7\x90",
+              "Hebrew UTF-8 passes through");
+
+        std::vector<wfi::PersonSummary> people;
+        check(db.people_list(people, err), "people list for json");
+        const std::string pj = wfi::people_json(people);
+        check(pj.front() == '[' && pj.back() == ']', "people json is an array");
+        check(pj.find("\"id\":") != std::string::npos &&
+                  pj.find("\"name\":\"Ima\"") != std::string::npos &&
+                  pj.find("\"faces\":") != std::string::npos &&
+                  pj.find("\"cover\":\"crops/") != std::string::npos,
+              "people json carries id/name/faces/cover");
+
+        wfi::PersonSummary who;
+        for (const auto& ps : people) if (ps.name == "Ima") who = ps;
+        std::vector<wfi::PersonFace> pfaces;
+        check(db.person_faces(who.id, pfaces, err), "person faces for json");
+        const std::string sj = wfi::person_json(who, pfaces);
+        check(sj.find("\"name\":\"Ima\"") != std::string::npos &&
+                  sj.find("\"photo\":\"") != std::string::npos &&
+                  sj.find("\"bbox\":\"0,0,1,1\"") != std::string::npos,
+              "person json carries name, photos, bboxes");
+
+        // A hostile name must not break the JSON shape.
+        wfi::PersonSummary nasty;
+        nasty.id = 7;
+        nasty.name = "x\",\"name\":\"evil";
+        const std::string nj = wfi::person_json(nasty, {});
+        check(nj.find("x\\\",\\\"name\\\":\\\"evil") != std::string::npos,
+              "hostile name stays inside its string");
+    }
+
     if (fails > 0) {
         std::fprintf(stderr, "%d test(s) failed\n", fails);
         return 1;

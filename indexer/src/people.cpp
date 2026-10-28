@@ -3,12 +3,71 @@
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <map>
 
 #include "cluster.h"
 
 namespace wfi {
+
+std::string json_escape(const std::string& s) {
+    std::string o;
+    o.reserve(s.size() + 2);
+    for (const unsigned char c : s) {
+        switch (c) {
+            case '"': o += "\\\""; break;
+            case '\\': o += "\\\\"; break;
+            case '\b': o += "\\b"; break;
+            case '\f': o += "\\f"; break;
+            case '\n': o += "\\n"; break;
+            case '\r': o += "\\r"; break;
+            case '\t': o += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    char u[8];
+                    std::snprintf(u, sizeof(u), "\\u%04x", c);
+                    o += u;
+                } else {
+                    o += (char)c;  // UTF-8 passes through
+                }
+        }
+    }
+    return o;
+}
+
+std::string people_json(const std::vector<PersonSummary>& people) {
+    std::string o = "[";
+    bool first = true;
+    for (const PersonSummary& ps : people) {
+        if (!first) o += ",";
+        first = false;
+        o += "{\"id\":" + std::to_string(ps.id) +
+             ",\"name\":\"" + json_escape(ps.name) +
+             "\",\"faces\":" + std::to_string(ps.face_count) +
+             ",\"cover\":\"" + json_escape(ps.cover_crop) + "\"}";
+    }
+    o += "]";
+    return o;
+}
+
+std::string person_json(const PersonSummary& who,
+                        const std::vector<PersonFace>& faces) {
+    std::string o = "{\"id\":" + std::to_string(who.id) +
+                    ",\"name\":\"" + json_escape(who.name) + "\",\"faces\":[";
+    bool first = true;
+    for (const PersonFace& pf : faces) {
+        if (!first) o += ",";
+        first = false;
+        o += "{\"id\":" + std::to_string(pf.id) +
+             ",\"bbox\":\"" + json_escape(pf.bbox) +
+             "\",\"crop\":\"" + json_escape(pf.crop_path) +
+             "\",\"photo\":\"" + json_escape(pf.photo_path) + "\"}";
+    }
+    o += "]}";
+    return o;
+}
+
 
 bool recluster(Db& db, double threshold, ClusterCounts& counts,
                std::string& err) {
