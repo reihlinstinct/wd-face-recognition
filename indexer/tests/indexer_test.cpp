@@ -19,6 +19,7 @@
 #include "../src/config.h"
 #include "../src/cropreserve.h"
 #include "../src/db.h"
+#include "../src/people.h"
 #include "../src/walk.h"
 
 static int fails = 0;
@@ -364,7 +365,7 @@ int main() {
     // max-overlap id/name preservation, people_list/person_faces, rename,
     // merge. One face row (a.jpg's) is already committed from the
     // pipeline tests above.
-    long first_id = 0;  // Ima's cluster id, for any later block
+    long first_id = 0;  // Ima's cluster id, reused by the recluster tests
     {
         // Queue two fresh photos and seed one face each.
         write_file(root + "/p1.jpg", "p1-bytes");
@@ -600,8 +601,8 @@ int main() {
             if (qq.path == root + "/a2.jpg") { a2id = qq.id; a2sz = qq.size; a2mt = qq.mtime; }
         }
         check(z2id > 0 && a2id > 0 && z2id < a2id, "z2 queued before a2");
-        seed_face(z2id, z2sz, z2mt, 0.3f, "crops/z2_t1_f0.jpg");
-        seed_face(a2id, a2sz, a2mt, 0.4f, "crops/a2_t1_f0.jpg");
+        seed_face(z2id, z2sz, z2mt, -0.9f, "crops/z2_t1_f0.jpg");
+        seed_face(a2id, a2sz, a2mt, -0.95f, "crops/a2_t1_f0.jpg");
         long zface = 0, a2face = 0;
         check(db.all_face_embeddings(cf, err), "faces re-read");
         for (const auto& f : cf) {
@@ -626,6 +627,197 @@ int main() {
         check(db.people_list(pl, err) && pl.size() == 2 && pl[0].name == "Ima",
               "final state: one named person");
         first_id = pl[0].id;
+    }
+
+    // --threshold parsing (issue #67): validated strtod, finite, [-1,1].
+    {
+        double th = 99.0;
+        check(wfi::parse_threshold("0.5", th) && th == 0.5, "plain value parses");
+        check(wfi::parse_threshold("-1", th) && th == -1.0, "lower boundary ok");
+        check(wfi::parse_threshold("1", th) && th == 1.0, "upper boundary ok");
+        check(wfi::parse_threshold("1e-3", th) && th == 0.001, "exponent ok");
+        check(!wfi::parse_threshold("abc", th), "malformed refused");
+        check(!wfi::parse_threshold("0.5x", th), "trailing junk refused");
+        check(!wfi::parse_threshold("", th), "empty refused");
+        check(!wfi::parse_threshold("nan", th), "NaN refused");
+        check(!wfi::parse_threshold("inf", th), "inf refused");
+        check(!wfi::parse_threshold("1e-400", th),
+              "underflow (ERANGE) refused, not silently 0");
+        check(!wfi::parse_threshold("1.5", th), "above range refused");
+        check(!wfi::parse_threshold("-2", th), "below range refused");
+    }
+
+    // CLI option parsing (issue #68): unknown flags and a trailing option
+    // without a value must be rejected, never silently ignored.
+    {
+        wfi::CliOptions opt;
+        std::string oerr;
+        char a0[] = "wdf_faces", a1[] = "cluster", a2[] = "--config",
+             a3[] = "c.conf", a4[] = "--threshold", a5[] = "0.7";
+        char* ok_argv[] = {a0, a1, a2, a3, a4, a5};
+        check(wfi::parse_cli_options(6, ok_argv, 2, true, opt, oerr) &&
+                  opt.config_path == "c.conf" && opt.threshold == 0.7,
+              "valid options parse");
+        char b2[] = "--bogus", b3[] = "1";
+        char* bad_argv[] = {a0, a1, b2, b3};
+        check(!wfi::parse_cli_options(4, bad_argv, 2, true, opt, oerr) &&
+                  oerr.find("unknown") != std::string::npos,
+              "unknown option refused");
+        char* trail_argv[] = {a0, a1, a4};
+        check(!wfi::parse_cli_options(3, trail_argv, 2, true, opt, oerr) &&
+                  oerr.find("needs a value") != std::string::npos,
+              "trailing valueless option refused");
+        char t5[] = "abc";
+        char* badth_argv[] = {a0, a1, a4, t5};
+        check(!wfi::parse_cli_options(4, badth_argv, 2, true, opt, oerr),
+              "bad threshold refused at parse");
+    }
+
+    // Per-subcommand options (issue #69): cluster refuses process flags
+    // and vice versa, before the index opens.
+    {
+        wfi::CliOptions opt;
+        std::string oerr;
+        char a0[] = "wdf_faces", a1[] = "cluster", a2[] = "--limit",
+             a3[] = "10";
+        char* cross_argv[] = {a0, a1, a2, a3};
+        check(!wfi::parse_cli_options(4, cross_argv, 2, true, opt, oerr) &&
+                  oerr.find("not valid for cluster") != std::string::npos,
+              "cluster refuses --limit");
+        char t2[] = "--threshold", t3[] = "0.7";
+        char* cth_argv[] = {a0, a1, t2, t3};
+        check(!wfi::parse_cli_options(4, cth_argv, 2, false, opt, oerr) &&
+                  oerr.find("not valid for process") != std::string::npos,
+              "process refuses --threshold");
+        char m2[] = "--models", m3[] = "/m";
+        char* cm_argv[] = {a0, a1, m2, m3};
+        check(!wfi::parse_cli_options(4, cm_argv, 2, true, opt, oerr),
+              "cluster refuses --models");
+        char th2[] = "--threads", th3[] = "4";
+        char* cth2_argv[] = {a0, a1, th2, th3};
+        check(!wfi::parse_cli_options(4, cth2_argv, 2, true, opt, oerr),
+              "cluster refuses --threads");
+        char c2[] = "--config", c3[] = "c.conf", l2[] = "--limit", l3[] = "10";
+        char* pok_argv[] = {a0, a1, c2, c3, l2, l3};
+        check(wfi::parse_cli_options(6, pok_argv, 2, false, opt, oerr) &&
+                  opt.limit == 10,
+              "process accepts its own flags");
+    }
+
+    // Integer option validation (issue #69): full consume + range.
+    {
+        wfi::CliOptions opt;
+        std::string oerr;
+        char a0[] = "wdf_faces", a1[] = "process", f1[] = "--limit";
+        char v1[] = "10x";
+        char* junk_argv[] = {a0, a1, f1, v1};
+        check(!wfi::parse_cli_options(4, junk_argv, 2, false, opt, oerr),
+              "limit with trailing junk refused");
+        char v2[] = "0";
+        char* zero_argv[] = {a0, a1, f1, v2};
+        check(!wfi::parse_cli_options(4, zero_argv, 2, false, opt, oerr),
+              "limit 0 refused");
+        char v3[] = "-5";
+        char* neg_argv[] = {a0, a1, f1, v3};
+        check(!wfi::parse_cli_options(4, neg_argv, 2, false, opt, oerr),
+              "negative limit refused");
+        char v4[] = "100001";
+        char* big_argv[] = {a0, a1, f1, v4};
+        check(!wfi::parse_cli_options(4, big_argv, 2, false, opt, oerr),
+              "limit above cap refused");
+        char v5[] = "1";
+        char* edge_argv[] = {a0, a1, f1, v5};
+        check(wfi::parse_cli_options(4, edge_argv, 2, false, opt, oerr) &&
+                  opt.limit == 1,
+              "limit 1 is the valid edge");
+        char f2[] = "--threads", t1[] = "0";
+        char* tz_argv[] = {a0, a1, f2, t1};
+        check(!wfi::parse_cli_options(4, tz_argv, 2, false, opt, oerr),
+              "threads 0 refused");
+        char t2[] = "33";
+        char* tb_argv[] = {a0, a1, f2, t2};
+        check(!wfi::parse_cli_options(4, tb_argv, 2, false, opt, oerr),
+              "threads above cap refused");
+        char t3[] = "1";
+        char* te_argv[] = {a0, a1, f2, t3};
+        check(wfi::parse_cli_options(4, te_argv, 2, false, opt, oerr) &&
+                  opt.threads_override == 1,
+              "threads 1 is the valid edge");
+    }
+
+    // recluster (issue #50, PR 3b): union-find over stored embeddings at
+    // cosine > 0.5. Four controlled faces: two near-identical pairs plus
+    // an orthogonal one; the five faces from the people tests above ride
+    // along (p1/p2 and z2/a2 each merge into their own pair, the 1-dim
+    // one stays alone via the size guard).
+    {
+        write_file(root + "/q1.jpg", "q1-bytes");
+        write_file(root + "/q2.jpg", "q2-bytes");
+        write_file(root + "/q3.jpg", "q3-bytes");
+        write_file(root + "/q4.jpg", "q4-bytes");
+        long jobr = db.begin_job(root);
+        for (const char* n : {"q1", "q2", "q3", "q4"})
+            check(db.observe(jobr, root, root + "/" + n + ".jpg", 8, 1000, err) == 1,
+                  "recluster photo queued");
+        check(db.flush(), "recluster seed batch committed");
+        std::vector<wfi::QueuedPhoto> rq;
+        check(db.queued_photos(200, rq, err), "recluster queue readable");
+        // 3-dim seeds: orthogonal to the 2-dim people-test embeddings, so
+        // only the intended pairs unite (the size guard skips cross pairs).
+        auto seed2 = [&](const char* name, float e0, float e1, float e2) {
+            for (const auto& qq : rq) {
+                if (qq.path != root + "/" + name + ".jpg") continue;
+                wfi::FaceRow r;
+                r.bbox = "0,0,1,1";
+                r.embedding = {e0, e1, e2};
+                r.crop_path = std::string("crops/") + name + "_t1_f0.jpg";
+                std::vector<std::string> oldc;
+                bool conflict = true;
+                check(db.replace_faces(qq.id, qq.size, qq.mtime, {r}, oldc,
+                                       conflict, err) && !conflict,
+                      "recluster face committed");
+            }
+        };
+        seed2("q1", 1.0f, 0.0f, 0.0f);
+        seed2("q2", 0.98f, 0.02f, 0.0f);  // ~identical direction to q1
+        seed2("q3", 0.0f, 1.0f, 0.0f);
+        seed2("q4", 0.0f, 0.98f, 0.02f);  // ~identical direction to q3
+
+        wfi::ClusterCounts cc;
+        check(wfi::recluster(db, 0.5, cc, err), "recluster commits");
+        check(cc.faces == 9, "all faces clustered");
+        // q1+q2, q3+q4, p1+p2 (near-parallel 2-dim), and the 1-dim
+        // singleton (size guard keeps it out of every pair).
+        check(cc.people == 5, "expected group count");
+        check(cc.singletons == 1, "only the dimension-skewed face is alone");
+
+        // Cluster membership via cover crops (cover = first face's crop).
+        std::vector<wfi::PersonSummary> rp;
+        check(db.people_list(rp, err), "people_list after recluster");
+        auto cluster_of = [&](const char* crop) -> long {
+            for (const auto& ps : rp) {
+                std::vector<wfi::PersonFace> rf;
+                check(db.person_faces(ps.id, rf, err), "person faces readable");
+                for (const auto& f : rf)
+                    if (f.crop_path == crop) return ps.id;
+            }
+            return 0;
+        };
+        const long c_q1 = cluster_of("crops/q1_t1_f0.jpg");
+        check(c_q1 > 0 && c_q1 == cluster_of("crops/q2_t1_f0.jpg"),
+              "near-identical pair shares a person");
+        check(cluster_of("crops/q3_t1_f0.jpg") == cluster_of("crops/q4_t1_f0.jpg"),
+              "second pair shares a person");
+        check(cluster_of("crops/q3_t1_f0.jpg") != c_q1,
+              "orthogonal pairs stay apart");
+        // Name preservation through recluster: the p1/p2 pair carries
+        // Ima's id from the people tests above.
+        check(cluster_of("crops/p1_t1_f0.jpg") == first_id,
+              "recluster keeps the named cluster on its largest fragment");
+        check(db.people_list(rp, err) && rp.size() == 5, "five people listed");
+        bool ima_named = false;
+        for (const auto& ps : rp) if (ps.id == first_id && ps.name == "Ima") ima_named = true;
+        check(ima_named, "name survives the full recluster");
     }
 
     if (fails > 0) {

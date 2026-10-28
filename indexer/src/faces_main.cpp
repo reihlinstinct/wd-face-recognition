@@ -9,6 +9,7 @@
 
 #include "config.h"
 #include "db.h"
+#include "people.h"
 #include "process.h"
 #include "sysres.h"
 
@@ -19,26 +20,56 @@ int main(int argc, char** argv) {
         std::printf("wdf_faces %s\n", WFF_VERSION);
         return 0;
     }
-    if (argc < 3 || std::strcmp(argv[1], "process") != 0) {
+    if (argc < 3 || (std::strcmp(argv[1], "process") != 0 &&
+                     std::strcmp(argv[1], "cluster") != 0)) {
         std::fprintf(stderr,
-            "usage: wdf_faces process --config FILE [--models DIR] [--limit N] [--threads N]\n");
+            "usage: wdf_faces process --config FILE [--models DIR] [--limit N] [--threads N]\n"
+            "       wdf_faces cluster --config FILE [--threshold 0.5]\n");
         return 2;
     }
-    std::string config_path, models_override;
-    long limit = 500;  // per-invocation cap: a runaway library cannot hog the NAS
-    int threads_override = 0;
-    for (int i = 2; i + 1 < argc; i += 2) {
-        if (std::strcmp(argv[i], "--config") == 0) config_path = argv[i + 1];
-        else if (std::strcmp(argv[i], "--models") == 0) models_override = argv[i + 1];
-        else if (std::strcmp(argv[i], "--limit") == 0) limit = std::atol(argv[i + 1]);
-        else if (std::strcmp(argv[i], "--threads") == 0) threads_override = std::atoi(argv[i + 1]);
-    }
-    wfi::Config cfg;
+    const bool is_cluster = std::strcmp(argv[1], "cluster") == 0;
+    // Unknown or incomplete options are rejected BEFORE the index is
+    // opened: a silently ignored flag must never lead to a full assignment
+    // rewrite under the default threshold (issue #68).
+    wfi::CliOptions opt;
     std::string err;
+    if (!wfi::parse_cli_options(argc, argv, 2, is_cluster, opt, err)) {
+        std::fprintf(stderr, "%s\n", err.c_str());
+        return 2;
+    }
+    const std::string& config_path = opt.config_path;
+    const std::string& models_override = opt.models_override;
+    const long limit = opt.limit;
+    const int threads_override = opt.threads_override;
+    const double threshold = opt.threshold;
+    wfi::Config cfg;
     if (!wfi::load_config(config_path, cfg, err)) {
         std::fprintf(stderr, "%s\n", err.c_str());
         return 2;
     }
+    // Face crops, embeddings and the index are private: never world-readable
+    // on a shared NAS (independent review #45).
+    umask(0077);
+    wfi::renice_self();
+
+    // cluster needs no models and no queue cap: it rewrites assignments
+    // from stored embeddings only (issue #50).
+    if (is_cluster) {
+        wfi::Db db;
+        if (!db.open(cfg.data_dir + "/index.db", err)) {
+            std::fprintf(stderr, "%s\n", err.c_str());
+            return 1;
+        }
+        wfi::ClusterCounts cc;
+        if (!wfi::recluster(db, threshold, cc, err)) {
+            std::fprintf(stderr, "cluster failed: %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("faces=%ld people=%ld singletons=%ld\n",
+                    cc.faces, cc.people, cc.singletons);
+        return 0;
+    }
+
     const std::string models = models_override.empty() ? cfg.models_dir : models_override;
     if (models.empty()) {
         std::fprintf(stderr, "no models dir: set models_dir in the config or pass --models\n");
@@ -49,10 +80,6 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "--limit must be >= 1\n");
         return 2;
     }
-    // Face crops, embeddings and the index are private: never world-readable
-    // on a shared NAS (independent review #45).
-    umask(0077);
-    wfi::renice_self();
     wfi::Db db;
     if (!db.open(cfg.data_dir + "/index.db", err)) {
         std::fprintf(stderr, "%s\n", err.c_str());

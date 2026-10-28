@@ -11,6 +11,8 @@ add_compile_options(-O2 -mno-avx -Wall -Wextra)
 add_library(sqlite3 STATIC third_party/sqlite3.c)
 target_include_directories(sqlite3 PUBLIC third_party)
 
+set(WDF_PIPELINE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../pipeline/src)
+
 add_executable(wdf_indexer src/main.cpp src/config.cpp src/db.cpp src/walk.cpp)
 target_link_libraries(wdf_indexer PRIVATE sqlite3 pthread dl)
 
@@ -23,10 +25,10 @@ if(WDF_FACES)
     find_package(OpenMP REQUIRED)
     find_path(JPEG_INCLUDE_DIR jpeglib.h REQUIRED)
     find_library(JPEG_LIBRARY NAMES jpeg REQUIRED)
-    set(WDF_PIPELINE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../pipeline/src)
     add_executable(wdf_faces
         src/faces_main.cpp src/process.cpp src/config.cpp src/db.cpp
-        src/cropreserve.cpp
+        src/cropreserve.cpp src/people.cpp
+        ${WDF_PIPELINE_DIR}/cluster.cpp
         ${WDF_PIPELINE_DIR}/align.cpp ${WDF_PIPELINE_DIR}/detect.cpp
         ${WDF_PIPELINE_DIR}/jpegio.cpp)
     target_include_directories(wdf_faces PRIVATE ${WDF_PIPELINE_DIR} ${JPEG_INCLUDE_DIR})
@@ -36,7 +38,9 @@ endif()
 option(WDF_INDEXER_TESTS "Build the indexer unit tests" OFF)
 if(WDF_INDEXER_TESTS)
     enable_testing()
-    add_executable(wfi_test tests/indexer_test.cpp src/config.cpp src/db.cpp src/walk.cpp src/cropreserve.cpp)
+    add_executable(wfi_test tests/indexer_test.cpp src/config.cpp src/db.cpp src/walk.cpp src/cropreserve.cpp
+        src/people.cpp ${WDF_PIPELINE_DIR}/cluster.cpp)
+    target_include_directories(wfi_test PRIVATE ${WDF_PIPELINE_DIR})
     target_link_libraries(wfi_test PRIVATE sqlite3 pthread dl)
     add_test(NAME indexer COMMAND wfi_test)
 endif()
