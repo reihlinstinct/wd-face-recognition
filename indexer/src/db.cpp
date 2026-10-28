@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS faces(
   crop_path TEXT NOT NULL,
   cluster_id INTEGER REFERENCES clusters(id)
 );
+CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
 CREATE TABLE IF NOT EXISTS clusters(
   id INTEGER PRIMARY KEY,
   name TEXT,

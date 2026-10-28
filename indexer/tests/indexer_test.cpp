@@ -569,6 +569,17 @@ int main() {
                       sqlite3_column_int64(st, 0) == 0,
                   "no merged audit rows survive a recluster");
             sqlite3_finalize(st);
+            // faces(cluster_id) must be indexed: people_list, person_faces
+            // and merge_clusters all filter on it (CodeRabbit #51).
+            check(sqlite3_prepare_v2(raw,
+                      "SELECT count(*) FROM sqlite_master"
+                      " WHERE type='index' AND name='idx_faces_cluster'",
+                      -1, &st, nullptr) == SQLITE_OK,
+                  "index query prepares");
+            check(sqlite3_step(st) == SQLITE_ROW &&
+                      sqlite3_column_int64(st, 0) == 1,
+                  "faces(cluster_id) is indexed");
+            sqlite3_finalize(st);
             sqlite3_close(raw);
         }
 
