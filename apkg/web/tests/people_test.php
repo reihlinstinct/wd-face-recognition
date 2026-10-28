@@ -85,6 +85,14 @@ check(wdf_post_id('-3') === null, 'negative rejected');
 check(wdf_post_id('1 OR 1=1') === null, 'injection rejected');
 check(wdf_post_id('') === null, 'empty rejected');
 
+// --- merge request gate (review #58) ---------------------------------------
+check(wdf_merge_request_error('1', '1', true) !== '', 'self-merge refused');
+check(wdf_merge_request_error('x', '2', true) !== '', 'bad from id refused');
+check(wdf_merge_request_error('1', '2', false) !== '',
+    'merge without confirmation refused');
+check(wdf_merge_request_error('1', '2', true) === '',
+    'confirmed merge of two people passes');
+
 // --- exec + parse through a stub wdf_faces --------------------------------
 @mkdir($tmp . '/bin', 0777, true);
 file_put_contents($tmp . '/bin/wdf_faces',

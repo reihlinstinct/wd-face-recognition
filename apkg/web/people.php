@@ -58,10 +58,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($action === 'merge') {
             $from = wdf_post_id((string)($_POST['from'] ?? ''));
             $to = wdf_post_id((string)($_POST['to'] ?? ''));
-            if ($from === null || $to === null || $from === $to) {
-                $msg = 'Pick two different people to merge.';
-            } elseif (empty($_POST['confirm'])) {
-                $msg = 'Tick the confirmation box - a merge cannot be undone.';
+            $mergeErr = wdf_merge_request_error((string)($_POST['from'] ?? ''),
+                (string)($_POST['to'] ?? ''), !empty($_POST['confirm']));
+            if ($mergeErr !== '') {
+                $msg = $mergeErr;
             } else {
                 [$rc, $out] = wdf_faces_call($appDir,
                     ['merge', '--config', $configPath,

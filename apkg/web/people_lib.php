@@ -161,3 +161,20 @@ function wdf_post_id(string $raw): ?int
     $id = (int)$raw;
     return $id > 0 ? $id : null;
 }
+
+// Merge request validation (review #58): two different valid ids plus the
+// explicit cannot-be-undone confirmation. Returns the error message, or
+// '' when the request may proceed.
+function wdf_merge_request_error(string $fromRaw, string $toRaw,
+                                 bool $confirmed): string
+{
+    $from = wdf_post_id($fromRaw);
+    $to = wdf_post_id($toRaw);
+    if ($from === null || $to === null || $from === $to) {
+        return 'Pick two different people to merge.';
+    }
+    if (!$confirmed) {
+        return 'Tick the confirmation box - a merge cannot be undone.';
+    }
+    return '';
+}
