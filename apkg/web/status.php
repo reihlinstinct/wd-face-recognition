@@ -54,3 +54,32 @@ function wdf_demo_eta(array $st, int $now): ?int
     $rate = $st['processed'] / $elapsed;
     return (int)round(($st['total'] - $st['processed']) / $rate);
 }
+
+// True only while $pid is alive AND belongs to the demo binary (checked via
+// /proc/<pid>/cmdline). The identity match matters twice: a wrapper killed
+// before writing "exit=" (crash, NAS reboot) must not leave the run
+// "running" forever, and a logged PID reused by an unrelated process must
+// never receive the cancel kill (CodeRabbit PR #34 review).
+function wdf_demo_pid_is_demo(?int $pid, string $needle = 'wdf_demo'): bool
+{
+    if ($pid === null || $pid <= 0) {
+        return false;
+    }
+    $cmd = @file_get_contents('/proc/' . $pid . '/cmdline');
+    return $cmd !== false && strpos($cmd, $needle) !== false;
+}
+
+// Parsed status with liveness applied: a run whose recorded demo process is
+// gone (or whose PID now belongs to something else) has failed orphaned -
+// the exit marker never came. The startup window (start= written, pid= not
+// yet) still counts as running.
+function wdf_demo_status_live(string $logFile): array
+{
+    $st = wdf_demo_status($logFile);
+    if ($st['state'] === 'running' && $st['pid'] !== null
+        && !wdf_demo_pid_is_demo($st['pid'])) {
+        $st['state'] = 'failed';
+        $st['orphaned'] = true;
+    }
+    return $st;
+}

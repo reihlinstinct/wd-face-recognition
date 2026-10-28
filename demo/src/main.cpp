@@ -326,6 +326,10 @@ struct UnionFind {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // Line-buffered stdout: the async demo runner (issue #33) redirects
+    // stdout to run.log, where full buffering would hide the per-photo
+    // progress lines until exit.
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);
     if (argc >= 2 && std::strcmp(argv[1], "--version") == 0) {
         std::printf("wdf_demo 0.2.3 (SCRFD-500M + MobileFaceNet, ncnn)\n");
         return 0;

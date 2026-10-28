@@ -62,6 +62,60 @@ file_put_contents($log, "start=1000\npid=4321\nphotos=9\nexit=143\n");
 $st = wdf_demo_status($log);
 check($st['state'] === 'failed' && $st['exit'] === 143, 'killed run settles as failed, not running');
 
+// --- PID liveness gating (CodeRabbit PR #34): a run whose recorded demo
+// process is gone, or whose PID was reused by something else, is an
+// orphaned failure - never a reason to keep blocking new runs, and never a
+// target for the cancel kill.
+check(!wdf_demo_pid_is_demo(null), 'null PID is not a demo process');
+check(!wdf_demo_pid_is_demo(999999), 'dead PID is not a demo process');
+check(!wdf_demo_pid_is_demo(getmypid()), 'this PHP process is not the demo binary');
+
+// A live process whose binary is named wdf_demo passes the identity check.
+$liveDir = sys_get_temp_dir() . '/wdf-live-' . getmypid();
+@mkdir($liveDir, 0777, true);
+@copy('/bin/sleep', $liveDir . '/wdf_demo');
+chmod($liveDir . '/wdf_demo', 0755);
+$livePid = (int)trim((string)shell_exec($liveDir . '/wdf_demo 30 >/dev/null 2>&1 & echo $!'));
+check($livePid > 0 && wdf_demo_pid_is_demo($livePid), 'live wdf_demo process passes identity check');
+
+// Live status: real demo process still alive -> running.
+file_put_contents($log, "start=1000\npid={$livePid}\nphotos=9\na.jpg: faces=1\n");
+$st = wdf_demo_status_live($log);
+check($st['state'] === 'running', 'live demo PID keeps the run in running state');
+
+// Dead/reused PID -> orphaned failure, unblocking later submissions.
+file_put_contents($log, "start=1000\npid=999999\nphotos=9\n");
+$st = wdf_demo_status_live($log);
+check($st['state'] === 'failed' && !empty($st['orphaned']),
+      'dead PID settles the run as an orphaned failure');
+file_put_contents($log, "start=1000\npid=" . getmypid() . "\nphotos=9\n");
+$st = wdf_demo_status_live($log);
+check($st['state'] === 'failed' && !empty($st['orphaned']),
+      'PID reused by a non-demo process is an orphaned failure');
+
+// Startup window: start= written, pid= not yet -> still running, nothing to kill.
+file_put_contents($log, "start=1000\n");
+$st = wdf_demo_status_live($log);
+check($st['state'] === 'running' && $st['pid'] === null,
+      'startup window (no pid= yet) still counts as running');
+
+// Once the demo process exits, the same log becomes an orphaned failure.
+exec('kill ' . $livePid . ' 2>/dev/null');
+$deadline = microtime(true) + 5;
+$gone = false;
+while (microtime(true) < $deadline) {
+    if (!wdf_demo_pid_is_demo($livePid)) {
+        $gone = true;
+        break;
+    }
+    usleep(50000);
+}
+check($gone, 'killed demo process no longer passes identity check');
+file_put_contents($log, "start=1000\npid={$livePid}\n");
+$st = wdf_demo_status_live($log);
+check($st['state'] === 'failed' && !empty($st['orphaned']),
+      'run with exited demo PID is an orphaned failure');
+
 if ($fails > 0) {
     fwrite(STDERR, "{$fails} test(s) failed\n");
     exit(1);

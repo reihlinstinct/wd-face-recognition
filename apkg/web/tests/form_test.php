@@ -56,6 +56,13 @@ check(strpos((string)$html, 'demo-pin.txt') !== false, 'hint names the PIN file'
 check(strpos((string)$html, 'dashboard file manager') === false, 'dead-end dashboard-file-manager wording gone');
 check(strpos((string)$html, 'קוד ה-PIN') !== false, 'Hebrew hint line present');
 
+// Recovery path (CodeRabbit PR #34): the hint must say what to do when the
+// share or PIN file is missing - toggle the app off/on to regenerate both.
+check(strpos((string)$html, 'toggle the app off and back on') !== false,
+      'hint explains the disable/re-enable recovery (EN)');
+check(strpos((string)$html, 'ייווצר PIN חדש') !== false,
+      'Hebrew hint line explains the recovery too');
+
 if ($fails > 0) {
     fwrite(STDERR, "{$fails} test(s) failed\n");
     exit(1);

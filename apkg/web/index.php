@@ -23,6 +23,7 @@ $modelsDir = $appDir . '/models';
 $reportsDir = '/shares/facerecog-reports';
 $demoOut = $reportsDir . '/demo-out';
 $runLog = $demoOut . '/run.log';
+$lockFile = $reportsDir . '/.demo.lock';
 $pinFile = $reportsDir . '/demo-pin.txt';
 $msg = '';
 
@@ -48,7 +49,7 @@ if (empty($_SESSION['csrf'])) {
 }
 $csrf = $_SESSION['csrf'];
 
-$status = wdf_demo_status($runLog);
+$status = wdf_demo_status_live($runLog);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $token = (string)($_POST['csrf'] ?? '');
@@ -59,11 +60,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!hash_equals($csrf, $token)) {
         $msg = 'Form token mismatch - reload the page and try again.';
     } elseif ($expectedPin === '' || !hash_equals($expectedPin, $pin)) {
-        $msg = 'Wrong demo PIN. Read it from ' . $pinFile . ' over SMB or the My Cloud app.';
+        $msg = 'Wrong demo PIN. Read it from ' . $pinFile . ' over SMB or the My Cloud app. If the share or file is missing, toggle the app off and back on to regenerate both with a fresh PIN.';
     } elseif ($action === 'cancel') {
-        // Cancel is best-effort: kill the demo's PID; the wrapper still
-        // appends its exit line, so the page settles on "failed".
-        if ($status['state'] === 'running' && $status['pid'] !== null) {
+        // Signal the demo only while the logged PID still belongs to the
+        // demo binary (CodeRabbit PR #34): after a crash or NAS reboot the
+        // PID may be dead or reused by an unrelated process, and during the
+        // startup window (start= written, pid= not yet) there is no PID.
+        if ($status['state'] === 'running'
+            && $status['pid'] !== null
+            && wdf_demo_pid_is_demo($status['pid'])) {
             exec('kill ' . (int)$status['pid'] . ' 2>/dev/null');
         }
         header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'), true, 303);
@@ -81,15 +86,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!is_dir($demoOut)) {
                 @mkdir($demoOut, 0777, true);
             }
-            @unlink($runLog);
-            // Async launch (issue #33): detached background job, output to
-            // run.log; survives the browser disconnecting.
-            $ok = wdf_run_demo_async([$demoBin, $photosDir, $modelsDir, $demoOut, '2'], $runLog);
-            if (!$ok) {
-                $msg = 'Failed to start the demo job - nothing is running. Send this page back with the report.';
+            // Serialize launches (CodeRabbit PR #34): two concurrent POSTs
+            // must not both read an idle status and start overlapping runs.
+            $lock = fopen($lockFile, 'c');
+            if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
+                if ($lock) {
+                    fclose($lock);
+                }
+                $msg = 'A demo run is already in progress - its progress is shown below.';
             } else {
-                header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'), true, 303);
-                exit;
+                // Fresh status re-check under the lock: the other POST may
+                // have just launched between our page-read status and here.
+                $lockedStatus = wdf_demo_status_live($runLog);
+                $ok = false;
+                if ($lockedStatus['state'] === 'running') {
+                    $msg = 'A demo run is already in progress - its progress is shown below.';
+                } else {
+                    @unlink($runLog);
+                    // Async launch (issue #33): detached background job,
+                    // output to run.log; survives the browser disconnecting.
+                    $ok = wdf_run_demo_async([$demoBin, $photosDir, $modelsDir, $demoOut, '2'], $runLog);
+                    if ($ok) {
+                        // Hold the lock until the wrapper's start= marker is
+                        // visible, so a concurrent POST sees a running state.
+                        $deadline = microtime(true) + 3.0;
+                        while (microtime(true) < $deadline) {
+                            if (wdf_demo_status($runLog)['start'] !== null) {
+                                break;
+                            }
+                            usleep(100000);
+                        }
+                    }
+                }
+                flock($lock, LOCK_UN);
+                fclose($lock);
+                if (!$ok && $msg === '') {
+                    $msg = 'Failed to start the demo job - nothing is running. Send this page back with the report.';
+                } elseif ($ok) {
+                    header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'), true, 303);
+                    exit;
+                }
             }
         }
     }
@@ -161,9 +197,12 @@ via SMB or the My Cloud app - it shows your photos grouped by person.</p>
 <label for="pin">Demo PIN</label>:<br>
 <span class="hint">Open the <b>facerecog-reports</b> share from your computer - the same way you open
 your other shares (Windows Explorer / Finder / My Cloud app) - and copy the 12 characters from
-<b>\\NAS\facerecog-reports\demo-pin.txt</b>.<br>
+<b>\\NAS\facerecog-reports\demo-pin.txt</b>.
+If the share or the file is missing, toggle the app off and back on
+(Apps &gt; WD Face Recognition) - it recreates both with a fresh PIN.<br>
 קוד ה-PIN (12 תווים) כתוב בקובץ demo-pin.txt בתוך השיתוף facerecog-reports -
-נכנסים לשיתוף מהמחשב כמו כל שיתוף אחר ומעתיקים.</span><br>
+נכנסים לשיתוף מהמחשב כמו כל שיתוף אחר ומעתיקים.
+אם השיתוף או הקובץ חסרים - כבו והדליקו מחדש את האפליקציה וייווצר PIN חדש.</span><br>
 <input type="password" id="pin" name="pin" autocomplete="one-time-code"
        autocapitalize="off" autocorrect="off" spellcheck="false" required><br><br>
 <label for="photos_dir">Photo folder</label> (absolute path under /shares/; subfolders are scanned too, up to 8 levels and 1000 photos per run; spaces and Hebrew names are fine - paste as-is, no backslashes needed):<br>
