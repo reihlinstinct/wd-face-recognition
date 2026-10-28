@@ -48,6 +48,14 @@ check(preg_match('/\srequired(?=[\s>\/])/', $tag) === 1, 'pin still required (ba
 // The form still POSTs and is still CSRF-protected.
 check(preg_match('/<input\b[^>]*\bname="csrf"[^>]*>/s', (string)$html) === 1, 'csrf token field rendered');
 
+// PIN discovery hint (issue #32): concrete SMB example + Hebrew line, no
+// dead-end "dashboard file manager" reference.
+check(strpos((string)$html, 'facerecog-reports') !== false, 'hint names the reports share');
+check(strpos((string)$html, '\\\\') !== false, 'hint shows an SMB-style path');
+check(strpos((string)$html, 'demo-pin.txt') !== false, 'hint names the PIN file');
+check(strpos((string)$html, 'dashboard file manager') === false, 'dead-end dashboard-file-manager wording gone');
+check(strpos((string)$html, 'קוד ה-PIN') !== false, 'Hebrew hint line present');
+
 if ($fails > 0) {
     fwrite(STDERR, "{$fails} test(s) failed\n");
     exit(1);

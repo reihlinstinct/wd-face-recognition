@@ -327,7 +327,7 @@ struct UnionFind {
 
 int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "--version") == 0) {
-        std::printf("wdf_demo 0.2.1 (SCRFD-500M + MobileFaceNet, ncnn)\n");
+        std::printf("wdf_demo 0.2.3 (SCRFD-500M + MobileFaceNet, ncnn)\n");
         return 0;
     }
     if (argc < 4) {

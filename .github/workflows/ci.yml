@@ -63,6 +63,9 @@ jobs:
       - name: Demo form markup tests (PHP)
         # PIN field stays masked but opts out of password managers (issue #29).
         run: php apkg/web/tests/form_test.php
+      - name: Demo async-run status tests (PHP)
+        # Detached job, log parsing, progress + ETA (issue #33).
+        run: php apkg/web/tests/status_test.php && php apkg/web/tests/async_test.php
   security:
     runs-on: ubuntu-latest
     steps:
