@@ -19,4 +19,10 @@ namespace wfi {
 bool reserve_crop_file(const std::string& abs_dir, const std::string& stem,
                        std::string& abs_path, std::string& err);
 
+// Makes dir exist with owner-only access: creates it 0700 when missing,
+// tightens a pre-existing directory's mode to 0700 (review #45: a wider
+// existing dir must not be trusted), and verifies it is a writable
+// directory. False with err on any failure.
+bool ensure_private_dir(const std::string& dir, std::string& err);
+
 }  // namespace wfi

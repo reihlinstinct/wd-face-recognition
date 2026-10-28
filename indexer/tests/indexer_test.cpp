@@ -4,6 +4,7 @@
 // re-queues. Run: ./wfi_test
 #include <atomic>
 #include <cstdio>
+#include <fcntl.h>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -316,6 +317,47 @@ int main() {
         t1.join();
         t2.join();
         check(claimed.size() == 16, "16 racing reservations all land on distinct paths");
+    }
+
+    // ensure_private_dir (independent review #45): a pre-existing wider
+    // directory is tightened to 0700 rather than trusted, a missing one is
+    // created 0700, and a non-directory is refused.
+    {
+        const std::string wdir = data + "/wide";
+        check(mkdir(wdir.c_str(), 0755) == 0, "wide dir created");
+        struct stat stw0;
+        check(stat(wdir.c_str(), &stw0) == 0 && (stw0.st_mode & 0777) != 0700,
+              "wide dir starts wider than 0700");
+        check(wfi::ensure_private_dir(wdir, err), "ensure_private_dir accepts an existing dir");
+        struct stat stw;
+        check(stat(wdir.c_str(), &stw) == 0 && (stw.st_mode & 0777) == 0700,
+              "existing dir tightened to 0700");
+        const std::string ndir = data + "/fresh-dir";
+        check(wfi::ensure_private_dir(ndir, err), "ensure_private_dir creates a missing dir");
+        struct stat stn;
+        check(stat(ndir.c_str(), &stn) == 0 && (stn.st_mode & 0777) == 0700,
+              "fresh dir created 0700");
+        const std::string notdir = data + "/not-a-dir";
+        write_file(notdir, "x");
+        check(!wfi::ensure_private_dir(notdir, err), "non-directory refused");
+    }
+
+    // A pre-existing group/world-readable index.db must be tightened to
+    // 0600 on open (independent review #45). umask masks FRESH files, so
+    // only a pre-created 0644 file catches a missing chmod.
+    {
+        const std::string d2 = tmp + "/data-wide";
+        check(mkdir(d2.c_str(), 0700) == 0, "second data dir created");
+        const std::string dbp = d2 + "/index.db";
+        int fd = open(dbp.c_str(), O_WRONLY | O_CREAT, 0644);
+        check(fd >= 0, "0644 db file pre-created");
+        if (fd >= 0) close(fd);
+        check(chmod(dbp.c_str(), 0644) == 0, "0644 mode forced past umask");
+        wfi::Db db2;
+        check(db2.open(dbp, err), "db opens over the pre-created file");
+        struct stat stb;
+        check(stat(dbp.c_str(), &stb) == 0 && (stb.st_mode & 0777) == 0600,
+              "pre-existing 0644 index.db tightened to 0600");
     }
 
     if (fails > 0) {

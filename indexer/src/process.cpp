@@ -38,23 +38,10 @@ namespace {
 // (CodeRabbit #45): an unwritable data_dir would otherwise fail every
 // photo's crop write and mark them all failed, with no automatic retry.
 bool ensure_crop_dir(const std::string& data_dir, std::string& err) {
-    for (const std::string& dir : {data_dir, data_dir + "/crops"}) {
-        // Private face data (review #45): dirs are owner-only.
-        if (mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST) {
-            err = "cannot create " + dir + ": " + std::strerror(errno);
-            return false;
-        }
-        struct stat st;
-        if (stat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
-            err = dir + " exists but is not a directory";
-            return false;
-        }
-        if (access(dir.c_str(), W_OK) != 0) {
-            err = dir + " is not writable: " + std::strerror(errno);
-            return false;
-        }
-    }
-    return true;
+    // Private face data (review #45): owner-only, and a pre-existing wider
+    // directory is tightened rather than trusted.
+    return ensure_private_dir(data_dir, err) &&
+           ensure_private_dir(data_dir + "/crops", err);
 }
 
 // mark_failed with the same SQLITE_BUSY retry policy as the commit path:
@@ -67,6 +54,9 @@ bool mark_failed_with_retry(Db& db, const QueuedPhoto& q, const std::string& why
         conflict = false;
         if (db.mark_failed(q.id, q.size, q.mtime, why, conflict, err)) return true;
         if (conflict || err.find("locked") == std::string::npos) return false;
+        // 4 tries = 3 real retries; never sleep after the final failure
+        // (independent review #45).
+        if (attempt == 3) return false;
         std::fprintf(stderr, "database busy (scan running?), retry %d/3\n",
                      attempt + 1);
         sleep(1u << attempt);
@@ -216,6 +206,9 @@ bool process_queued(Db& db, const std::string& models_dir,
             } else if (conflict) {
                 break;
             } else if (err.find("locked") != std::string::npos) {
+                // 4 tries = 3 real retries; never sleep after the final
+                // failure (independent review #45).
+                if (attempt >= 3) break;
                 std::fprintf(stderr, "database busy (scan running?), retry %d/3\n",
                              attempt + 1);
                 sleep(1u << attempt);

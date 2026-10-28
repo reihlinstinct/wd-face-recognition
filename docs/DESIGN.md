@@ -48,7 +48,10 @@ every contributor's job (Instinct, Claude, Tab):
   (int8) where accuracy holds; any model upgrade must re-justify its budget.
 - **Bounded everything:** streaming everywhere (ZIP export, tile serving, image
   decode), fixed-size queues, no whole-library structures in RAM; incremental
-  scanning by mtime delta, never a blind full re-walk.
+  scanning by mtime delta, never a blind full re-walk. Face indexing caps one
+  photo at 50MP: worst case is a progressive JPEG whose decode peaks near
+  450MB, which fits the indexer worker's 1.5GB RSS budget with headroom for
+  the OS, Samba and the web UI on the 4GB device (independent review #45).
 - **I/O discipline:** batched SQLite writes, WAL, read-ahead-friendly sequential
   file access, ionice idle class.
 - **Regression gates:** CI runs the benchmark suite with THRESHOLDS - a PR that

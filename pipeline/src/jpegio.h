@@ -9,10 +9,12 @@
 
 namespace wfp {
 
-// Default decode pixel cap (independent review #45): 50MP of RGB is 150MB;
-// the PR4100 has 1GB RAM and a scan must never let one photo squeeze out
-// everything else. Photos above the cap come back empty with
-// *reason = "too large"; corrupt/unsupported files give "decode".
+// Default decode pixel cap (independent review #45): 50MP of RGB is 150MB,
+// and decoding a progressive JPEG that size peaks near 450MB - inside the
+// indexer worker's 1.5GB RSS budget (DESIGN.md section 2a) on the 4GB
+// PR4100, while a scan never lets one photo squeeze out everything else.
+// Photos above the cap come back empty with *reason = "too large";
+// corrupt/unsupported files give "decode".
 constexpr int64_t kDefaultMaxPixels = 50000000;
 
 // Decodes a JPEG to RGB. Returns an empty image on any failure - a bad
