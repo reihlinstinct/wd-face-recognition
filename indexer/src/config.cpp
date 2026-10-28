@@ -75,12 +75,14 @@ bool parse_threshold(const char* s, double& out) {
 
 // strtol with full consume and range check, for the integer options
 // (issue #69): atol accepted trailing junk and wrapped out-of-range input.
+// No errno check: every call site bounds lo > LONG_MIN and hi < LONG_MAX,
+// so strtol clamping on over/underflow already lands outside [lo, hi] and
+// the range check refuses it (#77).
 static bool parse_long_range(const char* s, long lo, long hi, long& out) {
     if (s == nullptr || *s == '\0') return false;
-    errno = 0;
     char* end = nullptr;
     const long v = std::strtol(s, &end, 10);
-    if (errno != 0 || end == s || *end != '\0') return false;
+    if (end == s || *end != '\0') return false;
     if (v < lo || v > hi) return false;
     out = v;
     return true;
