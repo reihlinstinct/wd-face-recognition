@@ -107,6 +107,14 @@ check(wdf_rename_request_error('1', str_repeat('a', 128)) === '',
 check(wdf_rename_request_error('1', '  דנה  ') === '',
     'Hebrew name with padding passes');
 check(wdf_rename_request_error('1', 'Dana') === '', 'valid rename passes');
+if (function_exists('mb_strlen')) {
+    // The cap counts characters, not bytes (review #85): 100 Hebrew
+    // characters (~200 bytes) pass, 129 are refused.
+    check(wdf_rename_request_error('1', str_repeat('\u05d3', 100)) === '',
+        '100 Hebrew characters accepted');
+    check(wdf_rename_request_error('1', str_repeat('\u05d3', 129)) !== '',
+        '129 Hebrew characters refused');
+}
 
 // --- exec + parse through a stub wdf_faces --------------------------------
 @mkdir($tmp . '/bin', 0777, true);

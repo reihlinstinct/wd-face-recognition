@@ -174,7 +174,12 @@ function wdf_rename_request_error(string $idRaw, string $nameRaw): string
     if ($name === '') {
         return 'Enter a name for this person first.';
     }
-    if (strlen($name) > 128) {
+    // Characters, not bytes, to match the form's maxlength: a Hebrew
+    // name is multi-byte UTF-8 (review #85). strlen is the fallback
+    // when mbstring is absent.
+    $len = function_exists('mb_strlen') ? mb_strlen($name, 'UTF-8')
+        : strlen($name);
+    if ($len > 128) {
         return 'That name is too long - 128 characters maximum.';
     }
     return '';
