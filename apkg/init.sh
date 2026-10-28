@@ -27,6 +27,25 @@ if ! mkdir -p "${APP_PERSISTENT_DATA_PATH}/data" >> "${LOG}" 2>&1; then
 	exit 1
 fi
 WFI_CONF="${APP_PERSISTENT_DATA_PATH}/wfi.conf"
+APP_CONF_LINK="${APP_PATH}/wfi.conf"
+# Adopt a hand-made config that predates the persistent layout (review
+# #87): NEVER replace a real file with the empty default.
+if [ -f "${APP_CONF_LINK}" ] && [ ! -L "${APP_CONF_LINK}" ]; then
+	if [ ! -f "${WFI_CONF}" ]; then
+		log "adopting existing ${APP_CONF_LINK} as the persistent wfi.conf"
+		if ! mv "${APP_CONF_LINK}" "${WFI_CONF}" >> "${LOG}" 2>&1; then
+			log "ERROR: cannot move ${APP_CONF_LINK} to the persistent path"
+			exit 1
+		fi
+	else
+		BAK="${WFI_CONF}.bak-$(date '+%Y%m%d%H%M%S')"
+		log "WARNING: both ${APP_CONF_LINK} and ${WFI_CONF} exist - keeping the persistent one, the app-dir file moves to ${BAK}"
+		if ! mv "${APP_CONF_LINK}" "${BAK}" >> "${LOG}" 2>&1; then
+			log "ERROR: cannot move ${APP_CONF_LINK} aside to ${BAK}"
+			exit 1
+		fi
+	fi
+fi
 if [ ! -f "${WFI_CONF}" ]; then
 	log "writing default wfi.conf (roots empty until the owner sets them)"
 	{
@@ -41,5 +60,10 @@ if [ ! -f "${WFI_CONF}" ]; then
 	} > "${WFI_CONF}"
 fi
 # The pages and CLI look for wfi.conf next to the app; link to the
-# persistent copy so an uninstall only ever removes the link.
-ln -sf "${WFI_CONF}" "${APP_PATH}/wfi.conf" >> "${LOG}" 2>&1
+# persistent copy so an uninstall only ever removes the link. Any real
+# file was adopted above, so only a stale symlink can be in the way.
+[ -L "${APP_CONF_LINK}" ] && rm -f "${APP_CONF_LINK}"
+if ! ln -s "${WFI_CONF}" "${APP_CONF_LINK}" >> "${LOG}" 2>&1; then
+	log "ERROR: cannot link ${APP_CONF_LINK} to ${WFI_CONF}"
+	exit 1
+fi
