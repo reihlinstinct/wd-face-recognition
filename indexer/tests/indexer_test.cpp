@@ -736,6 +736,16 @@ int main() {
         char* ovi_argv[] = {a0, a1, i2, v9};
         check(!wfi::parse_cli_options(4, ovi_argv, 2, "person", opt, oerr),
               "overflow-length id refused (issue #70)");
+        // Negative underflow mirrors the positive case (issue #82):
+        // strtol clamps to LONG_MIN and the range check rejects it
+        // end-to-end.
+        char vn[] = "-99999999999999999999999";
+        char* udf_argv[] = {a0, a1, f1, vn};
+        check(!wfi::parse_cli_options(4, udf_argv, 2, "process", opt, oerr),
+              "negative-overflow limit refused (issue #82)");
+        char* udi_argv[] = {a0, a1, i2, vn};
+        check(!wfi::parse_cli_options(4, udi_argv, 2, "person", opt, oerr),
+              "negative-overflow id refused (issue #82)");
         char v5[] = "1";
         char* edge_argv[] = {a0, a1, f1, v5};
         check(wfi::parse_cli_options(4, edge_argv, 2, "process", opt, oerr) &&
