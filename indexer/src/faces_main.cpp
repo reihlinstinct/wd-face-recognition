@@ -37,7 +37,13 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--models") == 0) models_override = argv[i + 1];
         else if (std::strcmp(argv[i], "--limit") == 0) limit = std::atol(argv[i + 1]);
         else if (std::strcmp(argv[i], "--threads") == 0) threads_override = std::atoi(argv[i + 1]);
-        else if (std::strcmp(argv[i], "--threshold") == 0) threshold = std::atof(argv[i + 1]);
+        else if (std::strcmp(argv[i], "--threshold") == 0 &&
+                 wfi::parse_threshold(argv[i + 1], threshold)) { /* ok */ }
+        else if (std::strcmp(argv[i], "--threshold") == 0) {
+            std::fprintf(stderr, "bad --threshold '%s': want a finite number in [-1, 1]\n",
+                         argv[i + 1]);
+            return 2;
+        }
     }
     wfi::Config cfg;
     std::string err;

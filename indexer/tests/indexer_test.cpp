@@ -629,6 +629,22 @@ int main() {
         first_id = pl[0].id;
     }
 
+    // --threshold parsing (issue #67): validated strtod, finite, [-1,1].
+    {
+        double th = 99.0;
+        check(wfi::parse_threshold("0.5", th) && th == 0.5, "plain value parses");
+        check(wfi::parse_threshold("-1", th) && th == -1.0, "lower boundary ok");
+        check(wfi::parse_threshold("1", th) && th == 1.0, "upper boundary ok");
+        check(wfi::parse_threshold("1e-3", th) && th == 0.001, "exponent ok");
+        check(!wfi::parse_threshold("abc", th), "malformed refused");
+        check(!wfi::parse_threshold("0.5x", th), "trailing junk refused");
+        check(!wfi::parse_threshold("", th), "empty refused");
+        check(!wfi::parse_threshold("nan", th), "NaN refused");
+        check(!wfi::parse_threshold("inf", th), "inf refused");
+        check(!wfi::parse_threshold("1.5", th), "above range refused");
+        check(!wfi::parse_threshold("-2", th), "below range refused");
+    }
+
     // recluster (issue #50, PR 3b): union-find over stored embeddings at
     // cosine > 0.5. Four controlled faces: two near-identical pairs plus
     // an orthogonal one; the five faces from the people tests above ride
