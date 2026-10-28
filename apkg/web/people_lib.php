@@ -175,12 +175,18 @@ function wdf_rename_request_error(string $idRaw, string $nameRaw): string
         return 'Enter a name for this person first.';
     }
     // Characters, not bytes, to match the form's maxlength: a Hebrew
-    // name is multi-byte UTF-8 (review #85). strlen is the fallback
-    // when mbstring is absent.
-    $len = function_exists('mb_strlen') ? mb_strlen($name, 'UTF-8')
-        : strlen($name);
+    // name is multi-byte UTF-8 (review #85). The stripped OS5 PHP may
+    // lack mbstring; the strlen fallback then counts BYTES and the
+    // message must say so - never claim characters we did not count.
+    if (function_exists('mb_strlen')) {
+        $len = mb_strlen($name, 'UTF-8');
+        $unit = 'characters';
+    } else {
+        $len = strlen($name);
+        $unit = 'bytes';
+    }
     if ($len > 128) {
-        return 'That name is too long - 128 characters maximum.';
+        return 'That name is too long - 128 ' . $unit . ' maximum.';
     }
     return '';
 }

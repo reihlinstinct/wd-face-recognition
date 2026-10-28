@@ -107,13 +107,17 @@ check(wdf_rename_request_error('1', str_repeat('a', 128)) === '',
 check(wdf_rename_request_error('1', '  דנה  ') === '',
     'Hebrew name with padding passes');
 check(wdf_rename_request_error('1', 'Dana') === '', 'valid rename passes');
+// The cap counts characters, not bytes (review #85). mbstring is
+// REQUIRED for these assertions - fail loudly if the CI php lacks it
+// rather than silently skipping the character-cap pin.
+check(function_exists('mb_strlen'), 'mbstring available for cap tests');
 if (function_exists('mb_strlen')) {
-    // The cap counts characters, not bytes (review #85): 100 Hebrew
-    // characters (~200 bytes) pass, 129 are refused.
-    check(wdf_rename_request_error('1', str_repeat('\u05d3', 100)) === '',
+    check(wdf_rename_request_error('1', str_repeat('ד', 100)) === '',
         '100 Hebrew characters accepted');
-    check(wdf_rename_request_error('1', str_repeat('\u05d3', 129)) !== '',
+    check(wdf_rename_request_error('1', str_repeat('ד', 129)) !== '',
         '129 Hebrew characters refused');
+    check(strpos(wdf_rename_request_error('1', str_repeat('a', 129)),
+        'characters') !== false, 'mbstring message says characters');
 }
 
 // --- exec + parse through a stub wdf_faces --------------------------------
