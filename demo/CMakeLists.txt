@@ -19,8 +19,17 @@ find_package(OpenMP REQUIRED)
 find_path(JPEG_INCLUDE_DIR jpeglib.h REQUIRED)
 find_library(JPEG_LIBRARY NAMES jpeg REQUIRED)
 
-add_executable(wdf_demo src/main.cpp src/scan.cpp)
-target_include_directories(wdf_demo PRIVATE ${JPEG_INCLUDE_DIR})
+# Pipeline library (shared with the indexer, issue #40 PR 2): sources are
+# compiled straight into the demo - a separate installed lib would complicate
+# the fully static apkg link for no reuse benefit outside this repo.
+set(WDF_PIPELINE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../pipeline/src)
+
+add_executable(wdf_demo src/main.cpp src/scan.cpp
+    ${WDF_PIPELINE_DIR}/align.cpp
+    ${WDF_PIPELINE_DIR}/cluster.cpp
+    ${WDF_PIPELINE_DIR}/detect.cpp
+    ${WDF_PIPELINE_DIR}/jpegio.cpp)
+target_include_directories(wdf_demo PRIVATE ${WDF_PIPELINE_DIR} ${JPEG_INCLUDE_DIR})
 target_link_libraries(wdf_demo PRIVATE ncnn ${JPEG_LIBRARY} OpenMP::OpenMP_CXX)
 
 if(WDF_DEMO_STATIC)

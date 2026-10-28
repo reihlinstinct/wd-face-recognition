@@ -51,6 +51,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: g++ -std=c++17 -O2 -Wall -Wextra demo/tests/scan_test.cpp demo/src/scan.cpp -o /tmp/scan_test
       - run: /tmp/scan_test
+      - name: Pipeline unit tests (issue #40 PR 2)
+        # Alignment math, chips, cosine, union-find, jpeg roundtrip: no ncnn.
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libjpeg-dev
+          g++ -std=c++17 -O2 -Wall -Wextra -I pipeline/src pipeline/tests/pipeline_test.cpp pipeline/src/align.cpp pipeline/src/cluster.cpp pipeline/src/jpegio.cpp -ljpeg -o /tmp/pipeline_test
+          /tmp/pipeline_test
       - name: Demo web path-normalization tests (PHP)
         # Spaces, shell-escapes, trailing slashes, Hebrew names (issue #24).
         run: php apkg/web/tests/paths_test.php
@@ -90,6 +96,7 @@ jobs:
           gcc -O2 -c indexer/third_party/sqlite3.c -o /tmp/sqlite3.o
           g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
             indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \
+            indexer/src/cropreserve.cpp \
             indexer/tests/indexer_test.cpp /tmp/sqlite3.o -lpthread -ldl -o /tmp/wfi_test
           g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
             indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \

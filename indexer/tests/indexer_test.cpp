@@ -2,15 +2,22 @@
 // real SQLite DB in /tmp - first scan queues everything, second scan skips,
 // mtime change re-queues exactly one, deletion marks missing, reappearance
 // re-queues. Run: ./wfi_test
+#include <atomic>
 #include <cstdio>
+#include <fcntl.h>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <set>
 #include <string>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
 #include <utime.h>
+#include <vector>
 
 #include "../src/config.h"
+#include "../src/cropreserve.h"
 #include "../src/db.h"
 #include "../src/walk.h"
 
@@ -145,6 +152,213 @@ int main() {
     db.sweep_missing(job10, root);
     check(c10.added == 0 && c10.changed == 0,
           "deep photo survived the capped scan untouched");
+
+    // Face-pipeline DB contract (issue #40 PR 2): queued_photos lists the
+    // queue, replace_faces swaps rows atomically and reports old crops,
+    // mark_failed records the reason. No ncnn involved at this layer.
+    // The scans above legitimately leave three photos queued: a.jpg (job3
+    // touch), sub/b.jpg (job5 reappearance), the deep photo (job8 add).
+    {
+        std::vector<wfi::QueuedPhoto> q;
+        check(db.queued_photos(100, q, err), "queue query succeeds");
+        check(q.size() == 3, "three photos queued from the scans above");
+        long aid = 0, bid = 0;
+        int64_t asz = 0, amt = 0, bsz = 0, bmt = 0;
+        for (const auto& p : q) {
+            if (p.path == root + "/a.jpg") { aid = p.id; asz = p.size; amt = p.mtime; }
+            if (p.path == root + "/sub/b.jpg") { bid = p.id; bsz = p.size; bmt = p.mtime; }
+        }
+        check(aid > 0 && bid > 0, "queued ids resolved");
+
+        wfi::FaceRow r1;
+        r1.bbox = "1,2,3,4";
+        r1.embedding = {0.5f, -0.25f, 1.0f};
+        r1.crop_path = "crops/p" + std::to_string(aid) + "_f0.jpg";
+        std::vector<std::string> oldc;
+        bool conflict = true;  // must come back false on a clean commit
+        check(db.replace_faces(aid, asz, amt, {r1}, oldc, conflict, err) && !conflict,
+              "first replace_faces commits");
+        check(oldc.empty(), "no old crops on first process");
+        check(db.queued_photos(100, q, err) && q.size() == 2, "processed photo leaves the queue");
+
+        // Second round (reprocess): the old crop path comes back so the
+        // caller can unlink the stale file.
+        wfi::FaceRow r2;
+        r2.bbox = "5,6,7,8";
+        r2.embedding = {0.1f};
+        r2.crop_path = "crops/p" + std::to_string(aid) + "_f0.jpg";
+        oldc.clear();
+        // The guard only commits from 'queued' state: after the first
+        // replace the photo is 'scanned', so an immediate second replace
+        // conflicts (production re-processing always re-queues via a scan).
+        conflict = false;
+        check(!db.replace_faces(aid, asz, amt, {r2}, oldc, conflict, err) && conflict,
+              "scanned photo refuses a blind re-replace");
+        check(oldc.empty(), "refused commit reports no crops to unlink");
+        // Re-queue the photo (changed mtime), as the walk would.
+        long jobq = db.begin_job(root);
+        check(db.observe(jobq, root, root + "/a.jpg", asz, amt + 1, err) == 2,
+              "changed photo re-queued");
+        // A stale version (the pre-change mtime) must NOT commit either.
+        conflict = false;
+        err = "database is locked";  // stale error from a previous call
+        check(!db.replace_faces(aid, asz, amt, {r2}, oldc, conflict, err) && conflict,
+              "stale version refuses to commit");
+        check(err.empty(),
+              "conflict does not inherit a stale lock error (CodeRabbit #45)");
+        conflict = true;
+        check(db.replace_faces(aid, asz, amt + 1, {r2}, oldc, conflict, err) && !conflict,
+              "second replace_faces commits");
+        check(oldc.size() == 1 && oldc[0] == r1.crop_path, "old crop path reported");
+
+        // A failed photo carries its reason and leaves the queue.
+        conflict = false;
+        check(!db.mark_failed(bid, bsz, bmt + 1, "decode", conflict, err) && conflict,
+              "stale mark_failed refuses");
+        conflict = true;
+        check(db.mark_failed(bid, bsz, bmt, "decode", conflict, err) && !conflict,
+              "mark_failed commits");
+        check(db.queued_photos(100, q, err) && q.size() == 1, "failed photo leaves the queue");
+        check(db.queued_count() == 1, "queued_count reports the real queue depth");
+        // The refused replaces above must have rolled back completely:
+        // the first round's face row survives (review #45).
+        check(db.face_count(aid) == 1, "refused replace keeps committed face rows");
+
+        // Busy/rollback (review #45): a second connection holding the write
+        // lock makes replace_faces fail with "locked" after the (shortened)
+        // busy timeout - and the committed rows stay untouched.
+        {
+            // Re-queue a.jpg BEFORE the lock is taken (begin_job/observe
+            // need the write lock themselves), and commit the batch.
+            long jobl = db.begin_job(root);
+            check(db.observe(jobl, root, root + "/a.jpg", asz, amt + 2, err) == 2,
+                  "re-queue before busy test");
+            check(db.flush(), "re-queue committed");
+            sqlite3* raw = nullptr;  // grab an exclusive write lock directly
+            check(sqlite3_open((data + "/index.db").c_str(), &raw) == SQLITE_OK,
+                  "raw lock connection opens");
+            sqlite3_busy_timeout(raw, 5000);
+            check(sqlite3_exec(raw, "BEGIN IMMEDIATE", nullptr, nullptr, nullptr) == SQLITE_OK,
+                  "write lock taken");
+            db.set_busy_timeout(150);  // keep the test fast
+            check(db.replace_faces(aid, asz, amt + 2, {r2}, oldc, conflict, err) == false
+                      && !conflict && err.find("locked") != std::string::npos,
+                  "busy writer makes replace_faces fail with locked");
+            check(db.face_count(aid) == 1, "busy failure keeps committed rows");
+            check(sqlite3_exec(raw, "ROLLBACK", nullptr, nullptr, nullptr) == SQLITE_OK,
+                  "write lock released");
+            sqlite3_close(raw);
+            db.set_busy_timeout(5000);
+            conflict = true;
+            check(db.replace_faces(aid, asz, amt + 2, {r2}, oldc, conflict, err) && !conflict,
+                  "replace succeeds after the lock clears");
+        }
+    }
+
+    // Crop-path reservation (CodeRabbit #45): two concurrent process runs
+    // starting in the same second derive the same stem, so the path must be
+    // claimed exclusively. A loser must get its own path and must never be
+    // able to truncate or unlink the winner's crop.
+    {
+        const std::string cdir = data + "/crops";
+        check(mkdir(cdir.c_str(), 0700) == 0, "crop dir created");
+        const std::string stem = "p7_t123_f0";
+
+        std::string p1, p2;
+        check(wfi::reserve_crop_file(cdir, stem, p1, err), "first reservation succeeds");
+        check(wfi::reserve_crop_file(cdir, stem, p2, err), "second reservation succeeds despite collision");
+        check(p1 == cdir + "/" + stem + ".jpg", "first reservation gets the base path");
+        check(p2 == cdir + "/" + stem + "_r1.jpg", "loser gets a suffixed path");
+        check(p1 != p2, "racing writers get distinct paths");
+
+        struct stat st1, st2;
+        check(stat(p1.c_str(), &st1) == 0 && stat(p2.c_str(), &st2) == 0,
+              "both reserved files exist");
+        check(st1.st_size == 0 && st2.st_size == 0, "reserved files start empty");
+        check((st1.st_mode & 0777) == 0600 && (st2.st_mode & 0777) == 0600,
+              "reserved files are owner-only 0600");
+
+        // The winner can rewrite its own reservation (the encoder's "wb"
+        // open only ever truncates bytes this run owns).
+        write_file(p1, "winner-bytes");
+        write_file(p2, "loser-bytes");
+        char buf[16] = {0};
+        FILE* rf = std::fopen(p1.c_str(), "rb");
+        check(rf != nullptr && std::fread(buf, 1, 12, rf) == 12 &&
+                  std::string(buf) == "winner-bytes",
+              "winner's bytes survive the loser's reservation");
+        if (rf) std::fclose(rf);
+
+        // Exhaustion: all 100 candidates taken -> clean refusal.
+        for (int i = 2; i < 100; ++i)
+            write_file(cdir + "/" + stem + "_r" + std::to_string(i) + ".jpg", "");
+        std::string px;
+        check(!wfi::reserve_crop_file(cdir, stem, px, err),
+              "reservation refuses when every candidate exists");
+
+        // A real race: two threads grabbing paths for one stem from the
+        // same starting gate must never be handed the same path.
+        const std::string rstem = "p7_t123_f1";
+        std::atomic<bool> go{false};
+        std::mutex mu;
+        std::set<std::string> claimed;
+        auto racer = [&]() {
+            while (!go.load(std::memory_order_acquire)) {
+            }
+            for (int i = 0; i < 8; ++i) {
+                std::string rp, rerr;
+                if (!wfi::reserve_crop_file(cdir, rstem, rp, rerr)) continue;
+                std::lock_guard<std::mutex> lk(mu);
+                claimed.insert(rp);
+            }
+        };
+        std::thread t1(racer), t2(racer);
+        go.store(true, std::memory_order_release);
+        t1.join();
+        t2.join();
+        check(claimed.size() == 16, "16 racing reservations all land on distinct paths");
+    }
+
+    // ensure_private_dir (independent review #45): a pre-existing wider
+    // directory is tightened to 0700 rather than trusted, a missing one is
+    // created 0700, and a non-directory is refused.
+    {
+        const std::string wdir = data + "/wide";
+        check(mkdir(wdir.c_str(), 0755) == 0, "wide dir created");
+        struct stat stw0;
+        check(stat(wdir.c_str(), &stw0) == 0 && (stw0.st_mode & 0777) != 0700,
+              "wide dir starts wider than 0700");
+        check(wfi::ensure_private_dir(wdir, err), "ensure_private_dir accepts an existing dir");
+        struct stat stw;
+        check(stat(wdir.c_str(), &stw) == 0 && (stw.st_mode & 0777) == 0700,
+              "existing dir tightened to 0700");
+        const std::string ndir = data + "/fresh-dir";
+        check(wfi::ensure_private_dir(ndir, err), "ensure_private_dir creates a missing dir");
+        struct stat stn;
+        check(stat(ndir.c_str(), &stn) == 0 && (stn.st_mode & 0777) == 0700,
+              "fresh dir created 0700");
+        const std::string notdir = data + "/not-a-dir";
+        write_file(notdir, "x");
+        check(!wfi::ensure_private_dir(notdir, err), "non-directory refused");
+    }
+
+    // A pre-existing group/world-readable index.db must be tightened to
+    // 0600 on open (independent review #45). umask masks FRESH files, so
+    // only a pre-created 0644 file catches a missing chmod.
+    {
+        const std::string d2 = tmp + "/data-wide";
+        check(mkdir(d2.c_str(), 0700) == 0, "second data dir created");
+        const std::string dbp = d2 + "/index.db";
+        int fd = open(dbp.c_str(), O_WRONLY | O_CREAT, 0644);
+        check(fd >= 0, "0644 db file pre-created");
+        if (fd >= 0) close(fd);
+        check(chmod(dbp.c_str(), 0644) == 0, "0644 mode forced past umask");
+        wfi::Db db2;
+        check(db2.open(dbp, err), "db opens over the pre-created file");
+        struct stat stb;
+        check(stat(dbp.c_str(), &stb) == 0 && (stb.st_mode & 0777) == 0600,
+              "pre-existing 0644 index.db tightened to 0600");
+    }
 
     if (fails > 0) {
         std::fprintf(stderr, "%d test(s) failed\n", fails);

@@ -1,5 +1,7 @@
 #include "db.h"
 
+#include <sys/stat.h>
+
 namespace wfi {
 
 const char* kDetectorVersion = "scrfd-500m-int8";
@@ -75,7 +77,26 @@ bool Db::open(const std::string& path, std::string& err) {
         return false;
     }
     sqlite3_busy_timeout(db_, 5000);
-    return exec(kSchema, err);
+    if (!exec(kSchema, err)) return false;
+    // Face data is private (review #45): owner-only, even if an earlier
+    // version created the file under a loose umask. Best-effort: a
+    // filesystem without chmod (FAT USB share) must not block the index.
+    (void)chmod(path.c_str(), 0600);
+    return true;
+}
+
+void Db::set_busy_timeout(int ms) { sqlite3_busy_timeout(db_, ms); }
+
+long Db::face_count(long photo_id) {
+    (void)flush();
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db_, "SELECT count(*) FROM faces WHERE photo_id = ?",
+                           -1, &st, nullptr) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, photo_id);
+    long n = -1;
+    if (sqlite3_step(st) == SQLITE_ROW) n = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    return n;
 }
 
 long Db::begin_job(const std::string& root) {
@@ -229,6 +250,170 @@ bool Db::finish_job(long job_id, const ScanCounts& c) {
     bool ok = sqlite3_step(st) == SQLITE_DONE;
     sqlite3_finalize(st);
     return ok;
+}
+
+bool Db::queued_photos(long limit, std::vector<QueuedPhoto>& out, std::string& err) {
+    out.clear();
+    if (!flush()) {  // a pending observe batch must be visible to this read
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    sqlite3_stmt* st = nullptr;
+    const char* sql =
+        "SELECT id, path, size, mtime FROM photos"
+        " WHERE state = 'queued' ORDER BY path LIMIT ?";
+    if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+        err = sqlite3_errmsg(db_);
+        return false;
+    }
+    sqlite3_bind_int64(st, 1, limit);
+    int rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        QueuedPhoto q;
+        q.id = sqlite3_column_int64(st, 0);
+        q.path = (const char*)sqlite3_column_text(st, 1);
+        q.size = sqlite3_column_int64(st, 2);
+        q.mtime = sqlite3_column_int64(st, 3);
+        out.push_back(std::move(q));
+    }
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE) {
+        err = sqlite3_errmsg(db_);
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
+long Db::queued_count() {
+    (void)flush();
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db_, "SELECT count(*) FROM photos WHERE state = 'queued'",
+                           -1, &st, nullptr) != SQLITE_OK) return -1;
+    long n = -1;
+    if (sqlite3_step(st) == SQLITE_ROW) n = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    return n;
+}
+
+bool Db::replace_faces(long photo_id, int64_t size, int64_t mtime,
+                       const std::vector<FaceRow>& rows,
+                       std::vector<std::string>& old_crops,
+                       bool& conflict, std::string& err) {
+    conflict = false;
+    err.clear();  // no stale content: a fresh failure must set it (CodeRabbit #45)
+    if (!flush()) {
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    if (!exec("BEGIN IMMEDIATE", err)) return false;
+    bool ok = false;
+    do {
+        // Collect the old crop paths first: the caller unlinks them only
+        // after this transaction commits, so a failed replace never leaves
+        // the DB pointing at deleted files.
+        sqlite3_stmt* q = nullptr;
+        if (sqlite3_prepare_v2(db_, "SELECT crop_path FROM faces WHERE photo_id = ?",
+                               -1, &q, nullptr) != SQLITE_OK) break;
+        sqlite3_bind_int64(q, 1, photo_id);
+        while (sqlite3_step(q) == SQLITE_ROW)
+            old_crops.emplace_back((const char*)sqlite3_column_text(q, 0));
+        sqlite3_finalize(q);
+
+        sqlite3_stmt* d = nullptr;
+        if (sqlite3_prepare_v2(db_, "DELETE FROM faces WHERE photo_id = ?",
+                               -1, &d, nullptr) != SQLITE_OK) break;
+        sqlite3_bind_int64(d, 1, photo_id);
+        ok = sqlite3_step(d) == SQLITE_DONE;
+        sqlite3_finalize(d);
+        if (!ok) break;
+
+        for (const FaceRow& r : rows) {
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db_,
+                    "INSERT INTO faces(photo_id, bbox, embedding, crop_path)"
+                    " VALUES(?, ?, ?, ?)", -1, &st, nullptr) != SQLITE_OK) {
+                ok = false;
+                break;
+            }
+            sqlite3_bind_int64(st, 1, photo_id);
+            sqlite3_bind_text(st, 2, r.bbox.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_blob(st, 3, r.embedding.data(),
+                              (int)(r.embedding.size() * sizeof(float)), SQLITE_TRANSIENT);
+            sqlite3_bind_text(st, 4, r.crop_path.c_str(), -1, SQLITE_TRANSIENT);
+            ok = sqlite3_step(st) == SQLITE_DONE;
+            sqlite3_finalize(st);
+            if (!ok) break;
+        }
+        if (!ok) break;
+
+        // Version guard (CodeRabbit #45): commit only if the photo is
+        // still queued at exactly the version we processed. A concurrent
+        // scan that saw the file change re-queued it with new size/mtime;
+        // clobbering that would leave stale embeddings marked 'scanned'.
+        sqlite3_stmt* u = nullptr;
+        if (sqlite3_prepare_v2(db_,
+                "UPDATE photos SET state = 'scanned', scanned_at = strftime('%s','now'),"
+                " fail_reason = NULL"
+                " WHERE id = ? AND state = 'queued' AND size = ? AND mtime = ?",
+                -1, &u, nullptr) != SQLITE_OK) {
+            ok = false;
+            break;
+        }
+        sqlite3_bind_int64(u, 1, photo_id);
+        sqlite3_bind_int64(u, 2, size);
+        sqlite3_bind_int64(u, 3, mtime);
+        ok = sqlite3_step(u) == SQLITE_DONE;
+        const bool version_match = ok && sqlite3_changes(db_) == 1;
+        sqlite3_finalize(u);
+        if (ok && !version_match) {
+            conflict = true;
+            ok = false;
+        }
+    } while (false);
+
+    if (ok) ok = exec("COMMIT", err);
+    if (!ok) {
+        // Capture SQLite's diagnostic BEFORE the rollback: ROLLBACK itself
+        // can overwrite the connection's error state (CodeRabbit #45).
+        if (!conflict && err.empty()) err = sqlite3_errmsg(db_);
+        std::string rb;
+        exec("ROLLBACK", rb);  // best-effort; original error is the one to keep
+        old_crops.clear();  // nothing was committed: nothing may be unlinked
+    }
+    return ok;
+}
+
+bool Db::mark_failed(long photo_id, int64_t size, int64_t mtime,
+                     const std::string& reason, bool& conflict, std::string& err) {
+    conflict = false;
+    err.clear();
+    if (!flush()) {
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db_,
+            "UPDATE photos SET state = 'failed', fail_reason = ?,"
+            " scanned_at = strftime('%s','now')"
+            " WHERE id = ? AND state = 'queued' AND size = ? AND mtime = ?",
+            -1, &st, nullptr) != SQLITE_OK) {
+        err = sqlite3_errmsg(db_);
+        return false;
+    }
+    sqlite3_bind_text(st, 1, reason.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 2, photo_id);
+    sqlite3_bind_int64(st, 3, size);
+    sqlite3_bind_int64(st, 4, mtime);
+    bool ok = sqlite3_step(st) == SQLITE_DONE;
+    if (ok && sqlite3_changes(db_) != 1) {
+        // Changed under us (or dequeued): leave the newer queue state alone.
+        conflict = true;
+    } else if (!ok) {
+        err = sqlite3_errmsg(db_);
+    }
+    sqlite3_finalize(st);
+    return ok && !conflict;
 }
 
 }  // namespace wfi

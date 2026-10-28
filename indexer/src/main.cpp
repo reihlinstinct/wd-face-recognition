@@ -3,27 +3,17 @@
 // a later milestone PR. Resource discipline: nice 19 + ionice idle
 // (best-effort), streaming walk, batched DB writes.
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
-#include <sys/resource.h>
-#include <sys/syscall.h>
-#include <unistd.h>
-#include <time.h>
+#include <sys/stat.h>
 
 #include "config.h"
 #include "db.h"
+#include "sysres.h"
 #include "walk.h"
 
 #define WFI_VERSION "0.3.0-dev"
-
-// ionice idle class, best-effort (kernel may deny; harmless).
-static void renice_self() {
-    setpriority(PRIO_PROCESS, 0, 19);
-#ifdef SYS_ioprio_set
-    // IOPRIO_WHO_PROCESS=1, IOPRIO_CLASS_IDLE=3 -> (3 << 13)
-    syscall(SYS_ioprio_set, 1, 0, (3 << 13) | 0);
-#endif
-}
 
 int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "--version") == 0) {
@@ -46,7 +36,9 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", err.c_str());
         return 2;
     }
-    renice_self();
+    // The index holds face data: never world-readable (review #45).
+    umask(0077);
+    wfi::renice_self();
     wfi::Db db;
     if (!db.open(cfg.data_dir + "/index.db", err)) {
         std::fprintf(stderr, "%s\n", err.c_str());

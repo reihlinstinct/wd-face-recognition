@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace wfi {
 
@@ -19,6 +20,23 @@ struct ScanCounts {
     bool incomplete = false;    // some dir unreadable: sweep_missing must skip
     bool depth_capped = false;  // walk stopped at max_depth: deeper indexed
                                 // paths were not observed, sweep must skip
+};
+
+// A queued photo awaiting the face pipeline (process.cpp). size/mtime are
+// the version the queue entry was read at: processing commits only if the
+// photo still carries exactly this version (CodeRabbit #45).
+struct QueuedPhoto {
+    long id = 0;
+    std::string path;  // absolute, as the walk observed it
+    int64_t size = 0;
+    int64_t mtime = 0;
+};
+
+// One detected face row to persist for a photo.
+struct FaceRow {
+    std::string bbox;             // "x0,y0,x1,y1" pixel ints
+    std::vector<float> embedding; // raw floats, stored as a BLOB
+    std::string crop_path;        // relative to data_dir
 };
 
 class Db {
@@ -38,6 +56,33 @@ public:
     long sweep_missing(long job_id, const std::string& root);
     // Returns false when the update could not be persisted.
     bool finish_job(long job_id, const ScanCounts& c);
+    // Up to `limit` photos in state 'queued', oldest first by path.
+    // False on a query error: an unreadable queue must fail the run, not
+    // silently look empty (CodeRabbit #45).
+    bool queued_photos(long limit, std::vector<QueuedPhoto>& out, std::string& err);
+    // How many photos are still queued (for progress reporting).
+    // -1 on a query error.
+    long queued_count();
+    // Face rows stored for one photo (-1 on error). Used by tests and the
+    // people page.
+    long face_count(long photo_id);
+    // Tests only: shorten the lock wait so the busy path is exercisable.
+    void set_busy_timeout(int ms);
+    // Atomically replaces a photo's face rows with the new set and marks
+    // the photo 'scanned' - but only if the photo is still queued with the
+    // exact size/mtime version the caller processed. A concurrent scan that
+    // re-queued the photo (changed file) wins: conflict comes back true,
+    // nothing is committed, and the photo stays queued for a later run
+    // (CodeRabbit #45). The previous crop paths come back in old_crops for
+    // the caller to unlink after the commit (best-effort cleanup).
+    bool replace_faces(long photo_id, int64_t size, int64_t mtime,
+                       const std::vector<FaceRow>& rows,
+                       std::vector<std::string>& old_crops,
+                       bool& conflict, std::string& err);
+    // Marks a queued photo 'failed' with a reason (decode error etc).
+    // Same version guard as replace_faces.
+    bool mark_failed(long photo_id, int64_t size, int64_t mtime,
+                     const std::string& reason, bool& conflict, std::string& err);
     // Commits the open batch, if any. Returns false on COMMIT failure
     // (disk full / volume I/O error): the batch is NOT forgotten then, so
     // the caller fails the run instead of printing bogus counts.

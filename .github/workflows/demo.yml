@@ -2,7 +2,7 @@ name: demo
 
 on:
   pull_request:
-    paths: ["demo/**", ".github/workflows/demo.yml"]
+    paths: ["demo/**", "pipeline/**", "indexer/**", ".github/workflows/demo.yml"]
   workflow_dispatch:
 
 permissions:
@@ -91,6 +91,19 @@ jobs:
           # truncated.jpg exercises libjpeg's warning path (recoverable); only
           # required not to crash, which reaching index.html already proves
           echo "corrupt fixtures skipped cleanly"
+
+      - name: Build wdf_indexer + wdf_faces (indexer with pipeline, issue #40 PR 2)
+        run: |
+          indexer/get-sqlite.sh
+          cmake -S indexer -B build/indexer -DCMAKE_BUILD_TYPE=Release \
+            -DWDF_FACES=ON -DNCNN_INSTALL_DIR=/tmp/ncnn-build/install
+          cmake --build build/indexer --parallel
+
+      - name: Indexer faces end-to-end (real portraits + pipeline)
+        run: >
+          python3 indexer/tests/test_faces_e2e.py
+          build/indexer/wdf_indexer build/indexer/wdf_faces
+          /tmp/wdf-photos /tmp/wdf-models
 
       - name: Upload demo output
         uses: actions/upload-artifact@v4
