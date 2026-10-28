@@ -645,6 +645,32 @@ int main() {
         check(!wfi::parse_threshold("-2", th), "below range refused");
     }
 
+    // CLI option parsing (issue #68): unknown flags and a trailing option
+    // without a value must be rejected, never silently ignored.
+    {
+        wfi::CliOptions opt;
+        std::string oerr;
+        char a0[] = "wdf_faces", a1[] = "cluster", a2[] = "--config",
+             a3[] = "c.conf", a4[] = "--threshold", a5[] = "0.7";
+        char* ok_argv[] = {a0, a1, a2, a3, a4, a5};
+        check(wfi::parse_cli_options(6, ok_argv, 2, opt, oerr) &&
+                  opt.config_path == "c.conf" && opt.threshold == 0.7,
+              "valid options parse");
+        char b2[] = "--bogus", b3[] = "1";
+        char* bad_argv[] = {a0, a1, b2, b3};
+        check(!wfi::parse_cli_options(4, bad_argv, 2, opt, oerr) &&
+                  oerr.find("unknown") != std::string::npos,
+              "unknown option refused");
+        char* trail_argv[] = {a0, a1, a4};
+        check(!wfi::parse_cli_options(3, trail_argv, 2, opt, oerr) &&
+                  oerr.find("needs a value") != std::string::npos,
+              "trailing valueless option refused");
+        char t5[] = "abc";
+        char* badth_argv[] = {a0, a1, a4, t5};
+        check(!wfi::parse_cli_options(4, badth_argv, 2, opt, oerr),
+              "bad threshold refused at parse");
+    }
+
     // recluster (issue #50, PR 3b): union-find over stored embeddings at
     // cosine > 0.5. Four controlled faces: two near-identical pairs plus
     // an orthogonal one; the five faces from the people tests above ride

@@ -28,25 +28,21 @@ int main(int argc, char** argv) {
         return 2;
     }
     const bool is_cluster = std::strcmp(argv[1], "cluster") == 0;
-    std::string config_path, models_override;
-    long limit = 500;  // per-invocation cap: a runaway library cannot hog the NAS
-    int threads_override = 0;
-    double threshold = 0.5;  // demo-calibrated MobileFaceNet cosine cut
-    for (int i = 2; i + 1 < argc; i += 2) {
-        if (std::strcmp(argv[i], "--config") == 0) config_path = argv[i + 1];
-        else if (std::strcmp(argv[i], "--models") == 0) models_override = argv[i + 1];
-        else if (std::strcmp(argv[i], "--limit") == 0) limit = std::atol(argv[i + 1]);
-        else if (std::strcmp(argv[i], "--threads") == 0) threads_override = std::atoi(argv[i + 1]);
-        else if (std::strcmp(argv[i], "--threshold") == 0 &&
-                 wfi::parse_threshold(argv[i + 1], threshold)) { /* ok */ }
-        else if (std::strcmp(argv[i], "--threshold") == 0) {
-            std::fprintf(stderr, "bad --threshold '%s': want a finite number in [-1, 1]\n",
-                         argv[i + 1]);
-            return 2;
-        }
-    }
-    wfi::Config cfg;
+    // Unknown or incomplete options are rejected BEFORE the index is
+    // opened: a silently ignored flag must never lead to a full assignment
+    // rewrite under the default threshold (issue #68).
+    wfi::CliOptions opt;
     std::string err;
+    if (!wfi::parse_cli_options(argc, argv, 2, opt, err)) {
+        std::fprintf(stderr, "%s\n", err.c_str());
+        return 2;
+    }
+    const std::string& config_path = opt.config_path;
+    const std::string& models_override = opt.models_override;
+    const long limit = opt.limit;
+    const int threads_override = opt.threads_override;
+    const double threshold = opt.threshold;
+    wfi::Config cfg;
     if (!wfi::load_config(config_path, cfg, err)) {
         std::fprintf(stderr, "%s\n", err.c_str());
         return 2;

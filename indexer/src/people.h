@@ -28,8 +28,4 @@ bool recluster(Db& db, double threshold, ClusterCounts& counts,
                std::string& err);
 
 
-// Parses a --threshold CLI value: strtod with full consume, finite, and
-// within the cosine range [-1, 1] (issue #67). False on anything else.
-bool parse_threshold(const char* s, double& out);
-
 }  // namespace wfi

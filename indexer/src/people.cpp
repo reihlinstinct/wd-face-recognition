@@ -52,16 +52,4 @@ bool recluster(Db& db, double threshold, ClusterCounts& counts,
     if (!db.replace_clusters(groups, err)) return false;
     return true;
 }
-
-bool parse_threshold(const char* s, double& out) {
-    if (s == nullptr || *s == '\0') return false;
-    errno = 0;
-    char* end = nullptr;
-    const double v = std::strtod(s, &end);
-    if (errno != 0 || end == s || *end != '\0') return false;
-    if (!std::isfinite(v) || v < -1.0 || v > 1.0) return false;
-    out = v;
-    return true;
-}
-
 }  // namespace wfi

@@ -1,5 +1,9 @@
 #include "config.h"
 
+#include <cerrno>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 
@@ -54,6 +58,45 @@ bool load_config(const std::string& path, Config& out, std::string& err) {
     if (out.data_dir.empty()) {
         err = "config has no data_dir=";
         return false;
+    }
+    return true;
+}
+
+bool parse_threshold(const char* s, double& out) {
+    if (s == nullptr || *s == '\0') return false;
+    errno = 0;
+    char* end = nullptr;
+    const double v = std::strtod(s, &end);
+    if (errno != 0 || end == s || *end != '\0') return false;
+    if (!std::isfinite(v) || v < -1.0 || v > 1.0) return false;
+    out = v;
+    return true;
+}
+
+bool parse_cli_options(int argc, char** argv, int first, CliOptions& out,
+                       std::string& err) {
+    for (int i = first; i < argc; i += 2) {
+        const char* flag = argv[i];
+        if (i + 1 >= argc) {
+            err = std::string("option ") + flag + " needs a value";
+            return false;
+        }
+        const char* val = argv[i + 1];
+        if (std::strcmp(flag, "--config") == 0) out.config_path = val;
+        else if (std::strcmp(flag, "--models") == 0) out.models_override = val;
+        else if (std::strcmp(flag, "--limit") == 0) out.limit = std::atol(val);
+        else if (std::strcmp(flag, "--threads") == 0)
+            out.threads_override = std::atoi(val);
+        else if (std::strcmp(flag, "--threshold") == 0) {
+            if (!parse_threshold(val, out.threshold)) {
+                err = std::string("bad --threshold '") + val +
+                      "': want a finite number in [-1, 1]";
+                return false;
+            }
+        } else {
+            err = std::string("unknown option '") + flag + "'";
+            return false;
+        }
     }
     return true;
 }
