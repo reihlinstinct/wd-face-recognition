@@ -117,10 +117,11 @@ public:
     // False on a query error.
     bool all_face_embeddings(std::vector<ClusterFace>& out, std::string& err);
     // Rewrites cluster assignments from computed groups in ONE
-    // transaction. A group inherits the id and name of the previous live
-    // cluster covering the most of its faces (each old cluster reused at
-    // most once); other groups get fresh rows; clusters left without
-    // members are deleted. Faces in no group end with cluster_id NULL.
+    // transaction. Id/name preservation is global max-overlap, not group
+    // order: the LARGEST fragment of a split cluster keeps its id and
+    // name. Faces in no group end with cluster_id NULL; empty groups are
+    // skipped (never inserted); duplicate or unknown face ids are
+    // rejected before anything is written.
     bool replace_clusters(const std::vector<std::vector<long>>& groups,
                           std::string& err);
     // People page: live clusters, most faces first, cover = first face's
@@ -135,8 +136,9 @@ public:
     bool rename_cluster(long cluster_id, const std::string& name,
                         std::string& err);
     // Merges `from` into `to`: from's faces move, from is marked
-    // merged_into=to and leaves the people list. False when either id is
-    // not a live cluster, from == to, or the write fails.
+    // merged_into=to and leaves the people list. An unnamed target
+    // adopts the source's name; a named target keeps its own. False when
+    // either id is not a live cluster, from == to, or the write fails.
     bool merge_clusters(long from, long to, std::string& err);
 
 private:

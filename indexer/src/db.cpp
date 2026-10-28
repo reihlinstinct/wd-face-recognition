@@ -1,5 +1,6 @@
 #include "db.h"
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <set>
@@ -462,30 +463,43 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
         err = "COMMIT of the pending scan batch failed";
         return false;
     }
+    // Validate BEFORE touching the DB (review #51): duplicates would let
+    // one face silently land in the last group holding it, and unknown
+    // ids would update zero rows without anyone noticing.
+    std::set<long> grouped;
+    for (const auto& g : groups)
+        for (const long fid : g)
+            if (!grouped.insert(fid).second) {
+                err = "duplicate face id in groups";
+                return false;
+            }
+    if (!grouped.empty()) {
+        std::set<long> known;
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(db_, "SELECT id FROM faces", -1, &st,
+                               nullptr) != SQLITE_OK) {
+            err = sqlite3_errmsg(db_);
+            return false;
+        }
+        int rc;
+        while ((rc = sqlite3_step(st)) == SQLITE_ROW)
+            known.insert(sqlite3_column_int64(st, 0));
+        sqlite3_finalize(st);
+        if (rc != SQLITE_DONE) {
+            err = sqlite3_errmsg(db_);
+            return false;
+        }
+        for (const long fid : grouped)
+            if (known.count(fid) == 0) {
+                err = "unknown face id in groups";
+                return false;
+            }
+    }
     if (!exec("BEGIN IMMEDIATE", err)) return false;
     bool ok = false;
     do {
-        // Live cluster names, so a recomputed group keeps the name its
-        // members had before.
-        std::map<long, std::string> live_names;
         bool step_ok = true;
-        {
-            sqlite3_stmt* st = nullptr;
-            if (sqlite3_prepare_v2(db_,
-                    "SELECT id, name FROM clusters WHERE merged_into IS NULL",
-                    -1, &st, nullptr) != SQLITE_OK) {
-                step_ok = false;
-            } else {
-                while (sqlite3_step(st) == SQLITE_ROW) {
-                    const char* n = (const char*)sqlite3_column_text(st, 1);
-                    if (n != nullptr && n[0] != '\0')
-                        live_names[sqlite3_column_int64(st, 0)] = n;
-                }
-                sqlite3_finalize(st);
-            }
-        }
-        if (!step_ok) break;
-        // Current face -> cluster map, for id/name preservation by overlap.
+        // Current face -> live cluster map, for id/name preservation.
         std::map<long, long> face_cluster;
         {
             sqlite3_stmt* st = nullptr;
@@ -494,37 +508,62 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
                     -1, &st, nullptr) != SQLITE_OK) {
                 step_ok = false;
             } else {
-                while (sqlite3_step(st) == SQLITE_ROW)
+                int rc;
+                while ((rc = sqlite3_step(st)) == SQLITE_ROW)
                     face_cluster[sqlite3_column_int64(st, 0)] =
                         sqlite3_column_int64(st, 1);
+                if (rc != SQLITE_DONE) step_ok = false;
                 sqlite3_finalize(st);
             }
         }
         if (!step_ok) break;
-        // Each group reuses the live cluster covering most of its faces;
-        // an old cluster is reused by at most one group (its largest
-        // fragment keeps the name, splits start fresh).
-        std::set<long> reused;
-        std::vector<long> group_cluster(groups.size(), 0);
+        // Global max-overlap assignment (review #51): score every
+        // (group, live cluster) pair by shared faces and claim pairs
+        // best-first, so the LARGEST fragment of a split cluster keeps
+        // its id and name regardless of the caller's group order.
+        struct Claim {
+            long overlap;
+            size_t gi;
+            long cid;
+        };
+        std::vector<Claim> claims;
         for (size_t gi = 0; gi < groups.size(); ++gi) {
+            if (groups[gi].empty()) continue;  // never insert 0-face rows
             std::map<long, long> overlap;
             for (const long fid : groups[gi]) {
                 const auto it = face_cluster.find(fid);
-                if (it != face_cluster.end() && reused.count(it->second) == 0)
-                    ++overlap[it->second];
+                if (it != face_cluster.end()) ++overlap[it->second];
             }
-            long best = 0, best_n = 0;
             for (const auto& kv : overlap)
-                if (kv.second > best_n) { best = kv.first; best_n = kv.second; }
-            if (best != 0) {
-                group_cluster[gi] = best;
-                reused.insert(best);
+                claims.push_back({kv.second, gi, kv.first});
+        }
+        std::sort(claims.begin(), claims.end(),
+                  [](const Claim& a, const Claim& b) {
+                      if (a.overlap != b.overlap) return a.overlap > b.overlap;
+                      if (a.gi != b.gi) return a.gi < b.gi;
+                      return a.cid < b.cid;
+                  });
+        std::vector<long> group_cluster(groups.size(), 0);
+        {
+            std::set<long> used_clusters, used_groups;
+            for (const Claim& c : claims) {
+                if (used_groups.count(c.gi) != 0 ||
+                    used_clusters.count(c.cid) != 0)
+                    continue;
+                group_cluster[c.gi] = c.cid;
+                used_groups.insert(c.gi);
+                used_clusters.insert(c.cid);
             }
         }
-        // Clear assignments, drop live clusters no group kept.
+        std::set<long> reused;
+        for (const long cid : group_cluster)
+            if (cid != 0) reused.insert(cid);
+        // Clear assignments: faces no group covers end at NULL rather
+        // than pointing at a cluster they no longer belong to.
         if (sqlite3_exec(db_, "UPDATE faces SET cluster_id = NULL", nullptr,
                          nullptr, nullptr) != SQLITE_OK)
             break;
+        // Drop live clusters no group kept.
         {
             std::vector<long> live_ids;
             sqlite3_stmt* st = nullptr;
@@ -533,8 +572,10 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
                     -1, &st, nullptr) != SQLITE_OK) {
                 step_ok = false;
             } else {
-                while (sqlite3_step(st) == SQLITE_ROW)
+                int rc;
+                while ((rc = sqlite3_step(st)) == SQLITE_ROW)
                     live_ids.push_back(sqlite3_column_int64(st, 0));
+                if (rc != SQLITE_DONE) step_ok = false;
                 sqlite3_finalize(st);
             }
             sqlite3_stmt* del = nullptr;
@@ -562,6 +603,7 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
                          nullptr, nullptr, nullptr) != SQLITE_OK)
             break;
         for (size_t gi = 0; gi < groups.size() && step_ok; ++gi) {
+            if (groups[gi].empty()) continue;  // skipped, never inserted
             if (group_cluster[gi] == 0) {
                 sqlite3_stmt* ins = nullptr;
                 if (sqlite3_prepare_v2(db_,
@@ -760,6 +802,24 @@ bool Db::merge_clusters(long from, long to, std::string& err) {
                 break;
             sqlite3_bind_int64(st, 1, to);
             sqlite3_bind_int64(st, 2, from);
+            ok = sqlite3_step(st) == SQLITE_DONE;
+            sqlite3_finalize(st);
+            if (!ok) break;
+        }
+        // An unnamed target adopts the source's name rather than losing
+        // it with the source row (review #51); a named target keeps its
+        // own name.
+        {
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db_,
+                    "UPDATE clusters SET name = (SELECT name FROM clusters WHERE id = ?)"
+                    " WHERE id = ? AND (name IS NULL OR name = '')",
+                    -1, &st, nullptr) != SQLITE_OK) {
+                ok = false;
+                break;
+            }
+            sqlite3_bind_int64(st, 1, from);
+            sqlite3_bind_int64(st, 2, to);
             ok = sqlite3_step(st) == SQLITE_DONE;
             sqlite3_finalize(st);
             if (!ok) break;
