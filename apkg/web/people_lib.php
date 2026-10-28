@@ -162,6 +162,24 @@ function wdf_post_id(string $raw): ?int
     return $id > 0 ? $id : null;
 }
 
+// Rename request gate (issue #84): distinct messages so the user can
+// tell a bad id from an empty name - the CLI refuses to clear a name,
+// so the page rejects it before the exec.
+function wdf_rename_request_error(string $idRaw, string $nameRaw): string
+{
+    if (wdf_post_id($idRaw) === null) {
+        return 'Bad rename request.';
+    }
+    $name = trim($nameRaw);
+    if ($name === '') {
+        return 'Enter a name for this person first.';
+    }
+    if (strlen($name) > 128) {
+        return 'That name is too long - 128 characters maximum.';
+    }
+    return '';
+}
+
 // Merge request validation (review #58): two different valid ids plus the
 // explicit cannot-be-undone confirmation. Returns the error message, or
 // '' when the request may proceed.

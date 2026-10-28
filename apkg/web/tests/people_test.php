@@ -93,6 +93,21 @@ check(wdf_merge_request_error('1', '2', false) !== '',
 check(wdf_merge_request_error('1', '2', true) === '',
     'confirmed merge of two people passes');
 
+// --- rename request gate (issue #84) --------------------------------------
+check(wdf_rename_request_error('x', 'Dana') !== '', 'bad rename id refused');
+check(wdf_rename_request_error('1', '') !== '', 'empty rename name refused');
+check(wdf_rename_request_error('1', '   ') !== '',
+    'whitespace-only name refused');
+check(strpos(wdf_rename_request_error('1', ''), 'name') !== false,
+    'empty-name message is specific');
+check(wdf_rename_request_error('1', str_repeat('a', 129)) !== '',
+    'over-long name refused');
+check(wdf_rename_request_error('1', str_repeat('a', 128)) === '',
+    '128-char name passes');
+check(wdf_rename_request_error('1', '  דנה  ') === '',
+    'Hebrew name with padding passes');
+check(wdf_rename_request_error('1', 'Dana') === '', 'valid rename passes');
+
 // --- exec + parse through a stub wdf_faces --------------------------------
 @mkdir($tmp . '/bin', 0777, true);
 file_put_contents($tmp . '/bin/wdf_faces',
