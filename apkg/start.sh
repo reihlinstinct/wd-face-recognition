@@ -23,6 +23,7 @@ self_check() {
 self_check "${APP_PATH}/bin/wdf-worker"
 self_check "${APP_PATH}/bin/wdf-service"
 self_check "${APP_PATH}/bin/wdf_demo"
+self_check "${APP_PATH}/bin/wdf_faces"
 
 # Demo runner auth: a per-install PIN written to the reports share. Reading
 # it needs the authenticated WD dashboard (or SMB) - the same independent
