@@ -169,8 +169,10 @@ Installing and living with the app must be simple for a non-technical owner:
 |                                                                       |
 |  clustering service                                                   |
 |    - union-find over cosine-similar embedding pairs (0.5 cut); full   |
-|      recluster reuses stored embeddings and keeps ids/names by global |
-|      max-overlap, so a split's largest fragment keeps its identity    |
+|      recluster reuses stored embeddings and keeps ids/names by        |
+|      global max-overlap claims (a strictly larger overlap from a      |
+|      wholly absorbed cluster wins the contested group; see the        |
+|      recluster rule below)                                            |
 |    - "people" table; unknown clusters surface as "Person 7"           |
 |                                                                       |
 |  local web UI (mobile-first, no external CDN/fonts)                   |
@@ -181,6 +183,28 @@ Installing and living with the app must be simple for a non-technical owner:
 |  data dir on the RAID volume: SQLite DB, face thumbnails, models      |
 +-----------------------------------------------------------------------+
 ```
+
+### Recluster engine and cluster identity (0.3.0, issues #50/#71)
+
+`wdf_faces cluster` rebuilds all cluster assignments from STORED embeddings
+(no model run): union-find over pairs with cosine similarity above the
+threshold (default 0.5, demo-calibrated for MobileFaceNet), skipping pairs
+with missing embeddings or mismatched dimensions (version-skew guard).
+Groups come out deterministically ordered: largest first, equal sizes by
+smallest member face id.
+
+Identity preservation goes through `Db::replace_clusters` under one
+transaction. The claim rule is GLOBAL max-overlap: every (new group, live
+cluster) pair is scored by shared faces and pairs claim best-first -
+overlap descending, ties by group order then lowest cluster id. A split
+cluster's largest fragment keeps its id and name UNLESS a different live
+cluster claims that group with a strictly larger overlap (the wholly
+absorbed cluster wins); the split cluster's identity then continues on its
+largest unclaimed fragment. Rationale for choosing this over per-cluster
+largest-fragment priority: no cluster's identity is ever destroyed by a
+split alone, and the outcome is independent of caller group order.
+Unclaimed live clusters are dropped; merged-away rows are audit history
+and are superseded by a fresh recluster.
 
 ### Web UI access control
 The UI can view private photos and mutate data (purge, sidecar writes) - "LAN only"

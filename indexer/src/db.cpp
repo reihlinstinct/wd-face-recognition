@@ -529,10 +529,15 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
             }
         }
         if (!step_ok) break;
-        // Global max-overlap assignment (review #51): score every
-        // (group, live cluster) pair by shared faces and claim pairs
-        // best-first, so the LARGEST fragment of a split cluster keeps
-        // its id and name regardless of the caller's group order.
+        // Global max-overlap assignment (review #51; rule pinned in
+        // #71): score every (group, live cluster) pair by shared faces
+        // and claim pairs best-first: overlap descending, then group
+        // order, then lowest cluster id. A split cluster's largest
+        // fragment keeps its id/name UNLESS a different live cluster
+        // claims that group with a strictly larger overlap (e.g. a
+        // wholly absorbed cluster) - then the split cluster's identity
+        // continues on its largest unclaimed fragment. The rule is
+        // deterministic regardless of the caller's group order.
         struct Claim {
             long overlap;
             size_t gi;
