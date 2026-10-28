@@ -26,9 +26,12 @@ jobs:
           # archive.debian.org (EOL bullseye) flakes on individual fetches:
           # retry the update+install so one bad download does not kill the
           # build (issue: package job died on a transient protobuf fetch).
+          # Both halves inside the `if`: a standalone `apt-get update`
+          # failure would abort the -e shell without retrying (the class
+          # of flake this loop exists to survive).
           for attempt in 1 2 3; do
-            apt-get update
-            if DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            if apt-get update && \
+                DEBIAN_FRONTEND=noninteractive apt-get install -y \
                 --no-install-recommends --fix-missing \
                 build-essential ca-certificates cmake curl file git unzip \
                 pkg-config libjpeg62-turbo-dev protobuf-compiler \
