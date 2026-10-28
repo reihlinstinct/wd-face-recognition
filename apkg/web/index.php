@@ -88,11 +88,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             // Serialize launches (CodeRabbit PR #34): two concurrent POSTs
             // must not both read an idle status and start overlapping runs.
-            $lock = fopen($lockFile, 'c');
-            if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
-                if ($lock) {
-                    fclose($lock);
-                }
+            $lock = @fopen($lockFile, 'c');
+            if (!$lock) {
+                // Not contention: the reports share is missing or not
+                // writable, so no run can start at all.
+                $msg = 'Cannot create the run lock in the facerecog-reports share'
+                    . ' - check that the share exists and is writable (toggle the app off and on to recreate it).';
+            } elseif (!flock($lock, LOCK_EX | LOCK_NB)) {
+                fclose($lock);
                 $msg = 'A demo run is already in progress - its progress is shown below.';
             } else {
                 // Fresh status re-check under the lock: the other POST may
@@ -187,7 +190,12 @@ even if you close this tab - come back any time. הריצה ממשיכה גם א
 <p class="msg">Demo finished. Open <?= htmlspecialchars($demoOut, ENT_QUOTES, 'UTF-8') ?>/index.html
 via SMB or the My Cloud app - it shows your photos grouped by person.</p>
 <?php elseif ($status['state'] === 'failed'): ?>
+<?php if (!empty($status['orphaned'])): ?>
+<p class="msg" style="background:#f2e3e3">Demo stopped unexpectedly - the process is gone and no exit code was recorded
+(this can happen after a NAS reboot). You can start a new run. Log tail:</p>
+<?php else: ?>
 <p class="msg" style="background:#f2e3e3">Demo failed (exit <?= (int)$status['exit'] ?>). Log tail:</p>
+<?php endif; ?>
 <pre><?= htmlspecialchars(implode("\n", $status['tail']), ENT_QUOTES, 'UTF-8') ?></pre>
 <?php endif; ?>
 
