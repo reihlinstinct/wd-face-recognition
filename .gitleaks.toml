@@ -1,6 +1,10 @@
-# Vendored third-party code only. indexer/third_party holds the SQLite
-# amalgamation fetched by indexer/get-sqlite.sh (sha256-pinned); gitleaks'
-# generic-api-key rule flags its sqlite3_api->... struct accesses. These
-# are not secrets. Everything else in the repo is scanned as usual.
+# Extend the default rules (CodeRabbit: without this, a repo config
+# REPLACES the built-in detector set and real secrets would stop being
+# scanned). The allowlist only covers indexer/third_party: the SQLite
+# amalgamation fetched by indexer/get-sqlite.sh (sha256-pinned) trips the
+# generic-api-key rule on sqlite3_api->... struct accesses - not secrets.
+[extend]
+useDefault = true
+
 [allowlist]
 paths = ['''^indexer/third_party/.*''']  # anchored: nested lookalikes stay scanned

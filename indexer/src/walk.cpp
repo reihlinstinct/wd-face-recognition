@@ -48,7 +48,13 @@ bool walk_dir(Db& db, long job_id, const std::string& root, const std::string& a
     for (const std::string& name : names) {
         const std::string child = abs + "/" + name;
         struct stat st;
-        if (lstat(child.c_str(), &st) != 0) continue;
+        if (lstat(child.c_str(), &st) != 0) {
+            // ENOENT is benign (entry vanished between readdir and lstat);
+            // anything else (I/O error, perms) means partial coverage -
+            // flag incomplete so the missing sweep is skipped (CodeRabbit).
+            if (errno != ENOENT) c.incomplete = true;
+            continue;
+        }
         if (S_ISDIR(st.st_mode)) {  // lstat: symlinked dirs never followed
             if (depth < max_depth) {
                 if (!walk_dir(db, job_id, root, child, depth + 1, max_depth, c,
