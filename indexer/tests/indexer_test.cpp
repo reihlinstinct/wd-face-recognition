@@ -360,6 +360,97 @@ int main() {
               "pre-existing 0644 index.db tightened to 0600");
     }
 
+    // People methods (issue #50, PR 3): clustering rewrite with id/name
+    // preservation, people_list/person_faces, rename, merge. One face row
+    // (a.jpg's) is already committed from the pipeline tests above.
+    {
+        // Queue two fresh photos and seed one face each.
+        write_file(root + "/p1.jpg", "p1-bytes");
+        write_file(root + "/p2.jpg", "p2-bytes");
+        long jobp = db.begin_job(root);
+        check(db.observe(jobp, root, root + "/p1.jpg", 8, 1000, err) == 1, "p1 queued");
+        check(db.observe(jobp, root, root + "/p2.jpg", 8, 1000, err) == 1, "p2 queued");
+        check(db.flush(), "seed batch committed");
+
+        std::vector<wfi::QueuedPhoto> pq;
+        check(db.queued_photos(100, pq, err), "seed queue readable");
+        long p1id = 0, p2id = 0;
+        int64_t p1sz = 0, p1mt = 0, p2sz = 0, p2mt = 0;
+        for (const auto& qq : pq) {
+            if (qq.path == root + "/p1.jpg") { p1id = qq.id; p1sz = qq.size; p1mt = qq.mtime; }
+            if (qq.path == root + "/p2.jpg") { p2id = qq.id; p2sz = qq.size; p2mt = qq.mtime; }
+        }
+        check(p1id > 0 && p2id > 0, "seed ids resolved");
+        auto seed_face = [&](long pid, int64_t sz, int64_t mt, float embv,
+                             const std::string& crop) {
+            wfi::FaceRow r;
+            r.bbox = "0,0,1,1";
+            r.embedding = {embv, embv + 1.0f};
+            r.crop_path = crop;
+            std::vector<std::string> oldc;
+            bool conflict = true;
+            check(db.replace_faces(pid, sz, mt, {r}, oldc, conflict, err) && !conflict,
+                  "seed face committed");
+        };
+        seed_face(p1id, p1sz, p1mt, 0.1f, "crops/p1_t1_f0.jpg");
+        seed_face(p2id, p2sz, p2mt, 0.2f, "crops/p2_t1_f0.jpg");
+
+        // All faces: the two seeds + a.jpg's committed row.
+        std::vector<wfi::ClusterFace> cf;
+        check(db.all_face_embeddings(cf, err), "all_face_embeddings reads");
+        check(cf.size() == 3, "all three faces read for clustering");
+        check(cf[0].embedding.size() == 2 || cf[0].embedding.size() == 1,
+              "embedding blob round-trips");
+
+        // Cluster into three one-face groups and read back.
+        std::vector<std::vector<long>> groups = {{cf[0].id}, {cf[1].id}, {cf[2].id}};
+        check(db.replace_clusters(groups, err), "replace_clusters commits");
+        std::vector<wfi::PersonSummary> pl;
+        check(db.people_list(pl, err), "people_list reads");
+        check(pl.size() == 3 && pl[0].face_count == 1,
+              "three one-face people listed");
+        check(!pl[0].cover_crop.empty(), "cover crop populated");
+
+        // person_faces: photo path + crop; unknown id is empty, not an error.
+        const long first_id = pl[0].id;
+        std::vector<wfi::PersonFace> pf;
+        check(db.person_faces(first_id, pf, err), "person_faces reads");
+        check(pf.size() == 1 && !pf[0].photo_path.empty() &&
+                  pf[0].crop_path == pl[0].cover_crop,
+              "person face carries photo path and crop");
+        check(db.person_faces(999999, pf, err) && pf.empty(),
+              "unknown person is empty, not an error");
+
+        // Rename, then a recluster of the same groups must keep id AND name.
+        check(db.rename_cluster(first_id, "Ima", err), "rename commits");
+        check(!db.rename_cluster(999999, "x", err) && !err.empty(),
+              "rename of unknown person refused with a reason");
+        check(db.replace_clusters(groups, err), "second recluster commits");
+        check(db.people_list(pl, err), "people_list after recluster");
+        bool kept = false;
+        for (const auto& ps : pl)
+            if (ps.id == first_id && ps.name == "Ima") kept = true;
+        check(kept, "recluster preserves cluster id and name by overlap");
+
+        // Merge: another person folds into Ima; source leaves the list.
+        const long from_id = pl[0].id == first_id ? pl[1].id : pl[0].id;
+        check(!db.merge_clusters(first_id, first_id, err), "self-merge refused");
+        check(!db.merge_clusters(first_id, 999999, err), "merge into unknown refused");
+        check(db.merge_clusters(from_id, first_id, err), "merge commits");
+        check(db.people_list(pl, err) && pl.size() == 2 &&
+                  pl[0].id == first_id && pl[0].face_count == 2,
+              "merged source leaves the list, faces move");
+        check(db.person_faces(first_id, pf, err) && pf.size() == 2,
+              "person page shows both faces after merge");
+
+        // A later recluster supersedes the merge audit rows and keeps the name.
+        check(db.replace_clusters({{cf[0].id, cf[1].id, cf[2].id}}, err),
+              "single-group recluster commits");
+        check(db.people_list(pl, err) && pl.size() == 1 && pl[0].name == "Ima" &&
+                  pl[0].face_count == 3,
+              "recluster keeps the surviving name");
+    }
+
     if (fails > 0) {
         std::fprintf(stderr, "%d test(s) failed\n", fails);
         return 1;
