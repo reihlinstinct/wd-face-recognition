@@ -38,6 +38,25 @@ check(wdf_normalize_photos_dir($prefix . 'back\slash', $prefix) === $prefix . 'b
 check(wdf_normalize_photos_dir($prefix . 'escape', $prefix) === null, 'symlink escaping prefix rejected');
 @symlink($tmp . '/shares/rei', $tmp . '/shares/alias-in');
 check(wdf_normalize_photos_dir($prefix . 'alias-in', $prefix) === $prefix . 'alias-in', 'symlink within prefix allowed');
+// OS5 share layout (issue #28): a share is a symlink at the shares root
+// into the data volume; the same-name rule accepts it, and nested paths
+// inside it resolve.
+@mkdir($tmp . '/vol/משפחה/חופשה', 0777, true);
+@symlink($tmp . '/vol/משפחה', $tmp . '/shares/משפחה');
+check(wdf_normalize_photos_dir($prefix . 'משפחה', $prefix) === $prefix . 'משפחה', 'share symlink accepted');
+check(wdf_normalize_photos_dir($prefix . 'משפחה/חופשה', $prefix) === $prefix . 'משפחה/חופשה', 'nested path inside share symlink accepted');
+// Nested symlinks are never followed, even into an allowed share
+// (consistent with the browser listing and the lstat-based scanner).
+@symlink($tmp . '/vol/משפחה', $tmp . '/shares/rei/shortcut');
+check(wdf_normalize_photos_dir($prefix . 'rei/shortcut', $prefix) === null, 'nested link into share rejected');
+@symlink($tmp . '/vol/משפחה/חופשה', $tmp . '/vol/משפחה/inlink');
+check(wdf_normalize_photos_dir($prefix . 'משפחה/inlink', $prefix) === null, 'link inside a symlinked share rejected');
+// A root-level link into the OS filesystem under another name is not a share.
+@symlink('/etc', $tmp . '/shares/evil');
+check(wdf_normalize_photos_dir($prefix . 'evil', $prefix) === null, 'root link to /etc rejected');
+// A dangling share link is rejected.
+@symlink($tmp . '/vol/gone', $tmp . '/shares/Gone');
+check(wdf_normalize_photos_dir($prefix . 'Gone', $prefix) === null, 'dangling share link rejected');
 // Guards: outside prefix, "..", missing folder, empty input.
 check(wdf_normalize_photos_dir('/etc', $prefix) === null, 'outside prefix rejected');
 check(wdf_normalize_photos_dir($prefix . '..', $prefix) === null, 'dotdot rejected');

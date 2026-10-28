@@ -12,7 +12,7 @@ session_start();
 require_once __DIR__ . '/paths.php';
 require_once __DIR__ . '/run.php';
 require_once __DIR__ . '/browse.php';
-$version = '0.2.1';
+$version = '0.2.2';
 $appDir = realpath(dirname(__DIR__));
 $demoBin = $appDir . '/bin/wdf_demo';
 $modelsDir = $appDir . '/models';
