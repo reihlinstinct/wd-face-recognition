@@ -66,6 +66,12 @@ jobs:
       - name: Demo async-run status tests (PHP)
         # Detached job, log parsing, progress + ETA (issue #33).
         run: php apkg/web/tests/status_test.php && php apkg/web/tests/async_test.php
+      - name: Demo results endpoint tests (PHP)
+        # In-browser results: crop guard + URL rewriting (issue #35).
+        run: php apkg/web/tests/results_test.php
+      - name: Session auth tests (PHP)
+        # PIN-rotation binding + HTTPS detection (CodeRabbit PR #42).
+        run: php apkg/web/tests/auth_test.php
   security:
     runs-on: ubuntu-latest
     steps:

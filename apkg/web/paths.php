@@ -177,3 +177,21 @@ function wdf_paths_overlap(string $a, string $b): bool
 {
     return wdf_path_is_within($a, $b) || wdf_path_is_within($b, $a);
 }
+
+// Resolve a crop image name to a file inside $cropsDir, or null. The name
+// must be a plain *.jpg basename (no directories, no traversal) and the
+// resolved file must stay inside the resolved crops directory (issue #35).
+function wdf_safe_crop_path(string $cropsDir, string $name): ?string
+{
+    if ($name === '' || basename($name) !== $name
+        || preg_match('/^[A-Za-z0-9._-]+\.jpg$/', $name) !== 1) {
+        return null;
+    }
+    $realDir = realpath($cropsDir);
+    $real = realpath($cropsDir . '/' . $name);
+    if ($realDir === false || $real === false
+        || !wdf_path_is_within($real, $realDir) || !is_file($real)) {
+        return null;
+    }
+    return $real;
+}

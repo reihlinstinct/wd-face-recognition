@@ -11,12 +11,13 @@
 // Runs are ASYNC (issue #33): the POST spawns a detached background job and
 // redirects (PRG); the job keeps running when the browser disconnects, and
 // the page re-renders live progress from the job's log (meta refresh).
-session_start();
+require_once __DIR__ . '/auth.php';
+wdf_session_start();
 require_once __DIR__ . '/paths.php';
 require_once __DIR__ . '/run.php';
 require_once __DIR__ . '/browse.php';
 require_once __DIR__ . '/status.php';
-$version = '0.2.3';
+$version = '0.2.4';
 $appDir = realpath(dirname(__DIR__));
 $demoBin = $appDir . '/bin/wdf_demo';
 $modelsDir = $appDir . '/models';
@@ -24,7 +25,7 @@ $reportsDir = '/shares/facerecog-reports';
 $demoOut = $reportsDir . '/demo-out';
 $runLog = $demoOut . '/run.log';
 $lockFile = $reportsDir . '/.demo.lock';
-$pinFile = $reportsDir . '/demo-pin.txt';
+$pinFile = getenv('WDF_PIN_FILE') !== false ? (string)getenv('WDF_PIN_FILE') : $reportsDir . '/demo-pin.txt';
 $msg = '';
 
 // Folder browser (issue #26): read-only GET navigation under /shares.
@@ -57,9 +58,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $expectedPin = is_file($pinFile) ? trim((string)file_get_contents($pinFile)) : '';
     $action = (string)($_POST['action'] ?? 'run');
 
+    if ($expectedPin !== '' && hash_equals($expectedPin, $pin)) {
+        // Correct PIN (CSRF is still enforced below): remember this
+        // browser - 30 days over HTTPS, browser-session over plain HTTP -
+        // bound to the current PIN so rotation invalidates it (#35, #42).
+        wdf_pin_session_mark($expectedPin);
+    }
+
     if (!hash_equals($csrf, $token)) {
         $msg = 'Form token mismatch - reload the page and try again.';
-    } elseif ($expectedPin === '' || !hash_equals($expectedPin, $pin)) {
+    } elseif (!wdf_pin_session_ok($pinFile)) {
         $msg = 'Wrong demo PIN. Read it from ' . $pinFile . ' over SMB or the My Cloud app. If the share or file is missing, toggle the app off and back on to regenerate both with a fresh PIN.';
     } elseif ($action === 'cancel') {
         // Signal the demo only while the logged PID still belongs to the
@@ -199,15 +207,18 @@ even if you close this tab - come back any time. הריצה ממשיכה גם א
 <form method="post">
 <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 <input type="hidden" name="action" value="cancel">
+<?php if (!wdf_pin_session_ok($pinFile)): ?>
 <label for="pin-cancel">Demo PIN</label> (required to cancel):<br>
 <input type="password" id="pin-cancel" name="pin" autocomplete="one-time-code"
        autocapitalize="off" autocorrect="off" spellcheck="false" required>
+<?php endif; ?>
 <button type="submit">Cancel run</button>
 </form>
 </div>
 <?php elseif ($status['state'] === 'done'): ?>
-<p class="msg">Demo finished. Open <?= htmlspecialchars($demoOut, ENT_QUOTES, 'UTF-8') ?>/index.html
-via SMB or the My Cloud app - it shows your photos grouped by person.</p>
+<p class="msg">Demo finished. <a href="results.php"><b>Open the results in this browser</b></a>
+(after your demo PIN) - or open <?= htmlspecialchars($demoOut, ENT_QUOTES, 'UTF-8') ?>/index.html
+via SMB or the My Cloud app. Your photos grouped by person. התוצאות נפתחות גם בדפדפן דרך הקישור למעלה.</p>
 <?php elseif ($status['state'] === 'failed'): ?>
 <?php if (!empty($status['orphaned'])): ?>
 <p class="msg" style="background:#f2e3e3">Demo stopped unexpectedly - the process is gone and no exit code was recorded
@@ -221,17 +232,19 @@ via SMB or the My Cloud app - it shows your photos grouped by person.</p>
 <h2>Demo: group a folder of photos by person</h2>
 <form method="post">
 <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
-<label for="pin">Demo PIN</label>:<br>
+<?php if (!wdf_pin_session_ok($pinFile)): ?>
+<label for="pin">Demo PIN</label> (first time on this browser - remembered 30 days over HTTPS, until you close the browser over plain HTTP):<br>
 <span class="hint">Open the <b>facerecog-reports</b> share from your computer - the same way you open
 your other shares (Windows Explorer / Finder / My Cloud app) - and copy the 12 characters from
 <b>\\NAS\facerecog-reports\demo-pin.txt</b>.
 If the share or the file is missing, toggle the app off and back on
 (Apps &gt; WD Face Recognition) - it recreates both with a fresh PIN.<br>
 קוד ה-PIN (12 תווים) כתוב בקובץ demo-pin.txt בתוך השיתוף facerecog-reports -
-נכנסים לשיתוף מהמחשב כמו כל שיתוף אחר ומעתיקים.
+נכנסים לשיתוף מהמחשב כמו כל שיתוף אחר ומעתיקים. מסמנים פעם אחת - ב-HTTPS נזכר 30 יום, אחרת עד סגירת הדפדפן.
 אם השיתוף או הקובץ חסרים - כבו והדליקו מחדש את האפליקציה וייווצר PIN חדש.</span><br>
 <input type="password" id="pin" name="pin" autocomplete="one-time-code"
        autocapitalize="off" autocorrect="off" spellcheck="false" required><br><br>
+<?php endif; ?>
 <label for="photos_dir">Photo folder</label> (absolute path under /shares/; subfolders are scanned too, up to 8 levels and 1000 photos per run; spaces and Hebrew names are fine - paste as-is, no backslashes needed):<br>
 <input type="text" id="photos_dir" name="photos_dir"
        placeholder="/shares/Public/demo-photos"

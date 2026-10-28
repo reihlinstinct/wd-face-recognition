@@ -331,7 +331,7 @@ int main(int argc, char** argv) {
     // progress lines until exit.
     std::setvbuf(stdout, nullptr, _IOLBF, 0);
     if (argc >= 2 && std::strcmp(argv[1], "--version") == 0) {
-        std::printf("wdf_demo 0.2.3 (SCRFD-500M + MobileFaceNet, ncnn)\n");
+        std::printf("wdf_demo 0.2.4 (SCRFD-500M + MobileFaceNet, ncnn)\n");
         return 0;
     }
     if (argc < 4) {
