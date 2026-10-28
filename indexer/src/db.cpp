@@ -463,9 +463,8 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
         err = "COMMIT of the pending scan batch failed";
         return false;
     }
-    // Validate BEFORE touching the DB (review #51): duplicates would let
-    // one face silently land in the last group holding it, and unknown
-    // ids would update zero rows without anyone noticing.
+    // Duplicates are input validation: no DB read needed. One face in two
+    // groups would silently land in the last group holding it (review #51).
     std::set<long> grouped;
     for (const auto& g : groups)
         for (const long fid : g)
@@ -473,29 +472,41 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
                 err = "duplicate face id in groups";
                 return false;
             }
+    if (!exec("BEGIN IMMEDIATE", err)) return false;
+    // Unknown-id validation runs UNDER the write lock (CodeRabbit #51):
+    // before the transaction a concurrent replace_faces could delete and
+    // reinsert a face between this read and the assignment loop, making an
+    // assignment UPDATE silently match zero rows.
     if (!grouped.empty()) {
         std::set<long> known;
         sqlite3_stmt* st = nullptr;
+        bool valid = false;
         if (sqlite3_prepare_v2(db_, "SELECT id FROM faces", -1, &st,
                                nullptr) != SQLITE_OK) {
             err = sqlite3_errmsg(db_);
-            return false;
-        }
-        int rc;
-        while ((rc = sqlite3_step(st)) == SQLITE_ROW)
-            known.insert(sqlite3_column_int64(st, 0));
-        sqlite3_finalize(st);
-        if (rc != SQLITE_DONE) {
-            err = sqlite3_errmsg(db_);
-            return false;
-        }
-        for (const long fid : grouped)
-            if (known.count(fid) == 0) {
-                err = "unknown face id in groups";
-                return false;
+        } else {
+            int rc;
+            while ((rc = sqlite3_step(st)) == SQLITE_ROW)
+                known.insert(sqlite3_column_int64(st, 0));
+            sqlite3_finalize(st);
+            if (rc != SQLITE_DONE) {
+                err = sqlite3_errmsg(db_);
+            } else {
+                valid = true;
+                for (const long fid : grouped)
+                    if (known.count(fid) == 0) {
+                        err = "unknown face id in groups";
+                        valid = false;
+                        break;
+                    }
             }
+        }
+        if (!valid) {
+            std::string rb;
+            exec("ROLLBACK", rb);
+            return false;
+        }
     }
-    if (!exec("BEGIN IMMEDIATE", err)) return false;
     bool ok = false;
     do {
         bool step_ok = true;
