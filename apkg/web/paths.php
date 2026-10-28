@@ -151,3 +151,19 @@ function wdf_path_is_within(string $path, string $dir): bool
 {
     return $path === $dir || strpos($path, $dir . '/') === 0;
 }
+
+// realpath() for paths whose tail may not exist yet: resolves the nearest
+// existing ancestor and re-appends the unresolved tail. Collapses ./, //
+// and symlinks in the existing part, which a raw string compare would miss.
+function wdf_realpath_lenient(string $path): string
+{
+    $real = realpath($path);
+    if ($real !== false) {
+        return $real;
+    }
+    $parent = dirname($path);
+    if ($parent === $path || $parent === '' || $parent === DIRECTORY_SEPARATOR) {
+        return $path;
+    }
+    return wdf_realpath_lenient($parent) . '/' . basename($path);
+}

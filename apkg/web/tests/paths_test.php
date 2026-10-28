@@ -81,6 +81,22 @@ check(!wdf_path_is_within('/shares/facerecog-reports', '/shares/facerecog-report
 check(!wdf_path_is_within('/shares/Public/photos', '/shares/facerecog-reports/demo-out'),
       'an unrelated folder is not within demo-out');
 
+// wdf_realpath_lenient: ./ and not-yet-existing tails resolve so the
+// demo-out source guard cannot be bypassed with a non-canonical path
+// (CodeRabbit PR #34).
+$rpTmp = sys_get_temp_dir() . '/wdf-rp-' . getmypid();
+@mkdir($rpTmp . '/demo-out/crops', 0777, true);
+check(wdf_realpath_lenient($rpTmp . '/demo-out') === realpath($rpTmp . '/demo-out'),
+      'existing path resolves to its realpath');
+check(wdf_realpath_lenient($rpTmp . '/missing/leaf') === realpath($rpTmp) . '/missing/leaf',
+      'missing tail is appended to the resolved ancestor');
+check(wdf_path_is_within(wdf_realpath_lenient($rpTmp . '/./demo-out/crops'),
+                         wdf_realpath_lenient($rpTmp . '/demo-out')),
+      'a ./ variant of a demo-out subfolder is caught by the resolved guard');
+check(!wdf_path_is_within(wdf_realpath_lenient($rpTmp . '/./other'),
+                          wdf_realpath_lenient($rpTmp . '/demo-out')),
+      'an unrelated ./ path still passes the resolved guard');
+
 if ($fails > 0) {
     fwrite(STDERR, "{$fails} test(s) failed\n");
     exit(1);
