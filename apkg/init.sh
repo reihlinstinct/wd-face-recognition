@@ -15,14 +15,20 @@ ln -sf "${APP_PATH}/web"/* "${APP_WEB_PATH}/" >> "${LOG}" 2>&1
 log "linking app icon into ${APP_WEB_PATH}"
 ln -sf "${APP_PATH}/logo.svg" "${APP_WEB_PATH}/logo.svg" >> "${LOG}" 2>&1
 
-# Default indexer/faces config (issue #56): materialize once, never
-# overwrite - a reinstall must keep the owner's edits. roots stays
-# EMPTY on purpose (owner rule: family photos are private, nothing is
-# scanned until roots are chosen in wfi.conf).
-WFI_CONF="${APP_PATH}/wfi.conf"
+# Default indexer/faces config (issue #56). The file lives on the
+# PERSISTENT _conf path - under ${APP_PATH} an uninstall would delete
+# the owner's chosen roots (review #87). Never overwrite: a reinstall
+# keeps owner edits. roots stays EMPTY on purpose (owner rule: family
+# photos are private, nothing is scanned until roots are chosen).
+# Abort if the data dir cannot be created: writing a config that
+# points at an unwritable data_dir would fail every run later.
+if ! mkdir -p "${APP_PERSISTENT_DATA_PATH}/data" >> "${LOG}" 2>&1; then
+	log "ERROR: cannot create ${APP_PERSISTENT_DATA_PATH}/data - wfi.conf not written"
+	exit 1
+fi
+WFI_CONF="${APP_PERSISTENT_DATA_PATH}/wfi.conf"
 if [ ! -f "${WFI_CONF}" ]; then
 	log "writing default wfi.conf (roots empty until the owner sets them)"
-	mkdir -p "${APP_PERSISTENT_DATA_PATH}/data"
 	{
 		echo "# wd-face-recognition indexer/faces config."
 		echo "# roots is EMPTY on purpose (privacy): nothing is scanned until"
@@ -34,3 +40,6 @@ if [ ! -f "${WFI_CONF}" ]; then
 		echo "threads=2"
 	} > "${WFI_CONF}"
 fi
+# The pages and CLI look for wfi.conf next to the app; link to the
+# persistent copy so an uninstall only ever removes the link.
+ln -sf "${WFI_CONF}" "${APP_PATH}/wfi.conf" >> "${LOG}" 2>&1
