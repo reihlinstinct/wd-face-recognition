@@ -57,6 +57,9 @@ jobs:
       - name: Demo runner argv tests (PHP)
         # Hebrew/spaced/injection-shaped argv survive under LC_CTYPE=C (issue #24).
         run: php apkg/web/tests/exec_test.php
+      - name: Demo web folder-browser tests (PHP)
+        # /shares-restricted listing, symlink guards, escaped output (issue #26).
+        run: php apkg/web/tests/browse_test.php
   security:
     runs-on: ubuntu-latest
     steps:
