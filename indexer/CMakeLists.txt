@@ -42,5 +42,18 @@ if(WDF_INDEXER_TESTS)
         src/people.cpp ${WDF_PIPELINE_DIR}/cluster.cpp)
     target_include_directories(wfi_test PRIVATE ${WDF_PIPELINE_DIR})
     target_link_libraries(wfi_test PRIVATE sqlite3 pthread dl)
+    find_package(Python3 COMPONENTS Interpreter)
     add_test(NAME indexer COMMAND wfi_test)
+    # CLI dispatch test binary (issue #65): real faces_main with a stubbed
+    # process stage, so no ncnn/libjpeg is needed.
+    add_executable(wdf_faces_cli src/faces_main.cpp tests/process_stub.cpp
+        src/config.cpp src/db.cpp src/walk.cpp src/cropreserve.cpp
+        src/people.cpp ${WDF_PIPELINE_DIR}/cluster.cpp)
+    target_include_directories(wdf_faces_cli PRIVATE src ${WDF_PIPELINE_DIR})
+    target_link_libraries(wdf_faces_cli PRIVATE sqlite3 pthread dl)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME faces_cli COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_faces_cli.py
+            $<TARGET_FILE:wdf_faces_cli>)
+    endif()
 endif()
