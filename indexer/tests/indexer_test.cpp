@@ -725,6 +725,17 @@ int main() {
         char* big_argv[] = {a0, a1, f1, v4};
         check(!wfi::parse_cli_options(4, big_argv, 2, "process", opt, oerr),
               "limit above cap refused");
+        // Overflow-length input is refused END-TO-END (issue #70): strtol
+        // clamps and the range check rejects it; this does not pin the
+        // errno branch in parse_long_range (review #74).
+        char v9[] = "99999999999999999999999";
+        char* ovf_argv[] = {a0, a1, f1, v9};
+        check(!wfi::parse_cli_options(4, ovf_argv, 2, "process", opt, oerr),
+              "overflow-length limit refused (issue #70)");
+        char i2[] = "--id";
+        char* ovi_argv[] = {a0, a1, i2, v9};
+        check(!wfi::parse_cli_options(4, ovi_argv, 2, "person", opt, oerr),
+              "overflow-length id refused (issue #70)");
         char v5[] = "1";
         char* edge_argv[] = {a0, a1, f1, v5};
         check(wfi::parse_cli_options(4, edge_argv, 2, "process", opt, oerr) &&
@@ -863,6 +874,65 @@ int main() {
         bool ima_named = false;
         for (const auto& ps : rp) if (ps.id == first_id && ps.name == "Ima") ima_named = true;
         check(ima_named, "name survives the full recluster");
+    }
+
+    // recluster group ordering tiebreak (issue #64): equal-size groups
+    // must come out smallest-face-id-first, NOT in union-find root order.
+    // Pair A spans the lowest and highest face ids ({f1,f4}), pair B the
+    // two middle ones ({f2,f3}); unite() roots each pair at its HIGHER
+    // index, so root order is [B, A] while the contract order is [A, B].
+    // replace_clusters inserts new cluster ids in group order and
+    // people_list breaks size ties by id, so pl[0] reveals the order.
+    // Isolated Db so earlier blocks' clusters cannot pollute the list.
+    {
+        std::string tmp2 = tmp + "/tie";
+        std::string root2 = tmp2 + "/photos";
+        std::string data2 = tmp2 + "/data";
+        mkdir(tmp2.c_str(), 0777);
+        mkdir(root2.c_str(), 0777);
+        mkdir(data2.c_str(), 0777);
+        wfi::Db db2;
+        check(db2.open(data2 + "/index.db", err), "tiebreak db opens");
+        for (const char* n : {"t1", "t2", "t3", "t4"})
+            write_file(root2 + "/" + n + ".jpg", n);
+        long jobt = db2.begin_job(root2);
+        for (const char* n : {"t1", "t2", "t3", "t4"})
+            check(db2.observe(jobt, root2, root2 + "/" + n + ".jpg", 8, 1000, err) == 1,
+                  "tiebreak photo queued");
+        check(db2.flush(), "tiebreak batch committed");
+        std::vector<wfi::QueuedPhoto> tq;
+        check(db2.queued_photos(100, tq, err), "tiebreak queue readable");
+        // Seed in path order t1..t4 so face ids ascend t1<t2<t3<t4.
+        auto seed3 = [&](const char* name, float e0, float e1, float e2) {
+            for (const auto& qq : tq) {
+                if (qq.path != root2 + "/" + name + ".jpg") continue;
+                wfi::FaceRow r;
+                r.bbox = "0,0,1,1";
+                r.embedding = {e0, e1, e2};
+                r.crop_path = std::string("crops/") + name + "_t1_f0.jpg";
+                std::vector<std::string> oldc;
+                bool conflict = true;
+                check(db2.replace_faces(qq.id, qq.size, qq.mtime, {r}, oldc,
+                                        conflict, err) && !conflict,
+                      "tiebreak face committed");
+            }
+        };
+        seed3("t1", 1.0f, 0.0f, 0.0f);
+        seed3("t2", 0.0f, 1.0f, 0.0f);
+        seed3("t3", 0.0f, 0.98f, 0.02f);   // ~t2
+        seed3("t4", 0.98f, 0.0f, 0.02f);   // ~t1
+        wfi::ClusterCounts tc;
+        check(wfi::recluster(db2, 0.5, tc, err), "tiebreak recluster commits");
+        check(tc.people == 2 && tc.singletons == 0, "two equal pairs");
+        std::vector<wfi::PersonSummary> tpl;
+        check(db2.people_list(tpl, err), "tiebreak people listed");
+        check(tpl.size() == 2 && tpl[0].face_count == 2 &&
+                  tpl[1].face_count == 2,
+              "two 2-face people");
+        check(tpl[0].cover_crop == "crops/t1_t1_f0.jpg" &&
+                  tpl[1].cover_crop == "crops/t2_t1_f0.jpg",
+              "equal-size groups ordered by smallest face id, not root order");
+        check(tpl[0].id < tpl[1].id, "group order fixes insert order");
     }
 
     // JSON for the PHP pages (issue #50, PR 3c): escaping and shape.
