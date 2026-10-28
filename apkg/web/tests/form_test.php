@@ -63,6 +63,25 @@ check(strpos((string)$html, 'toggle the app off and back on') !== false,
 check(strpos((string)$html, 'ייווצר PIN חדש') !== false,
       'Hebrew hint line explains the recovery too');
 
+// Remembered browser (issue #35 follow-up, CodeRabbit PR #42): once the
+// PIN was entered correctly, the PIN field disappears from the run form.
+// The remembered session is bound to the CURRENT PIN, so the test seeds
+// the binding via a temp PIN file (WDF_PIN_FILE override).
+$testPin = '0123abcd4567';
+$testPinFile = $sessDir . '/demo-pin.txt';
+file_put_contents($testPinFile, $testPin . "\n");
+putenv('WDF_PIN_FILE=' . $testPinFile);
+$_SESSION['pin_ok'] = true;
+$_SESSION['pin_key'] = hash('sha256', $testPin);
+$_SERVER['REQUEST_METHOD'] = 'GET';
+ob_start();
+include __DIR__ . '/../index.php';
+$html2 = ob_get_clean();
+check(preg_match('/<input\b[^>]*\bname="pin"[^>]*>/s', (string)$html2) === 0,
+      'remembered browser renders no PIN field');
+check(strpos((string)$html2, 'name="csrf"') !== false,
+      'remembered browser still gets a CSRF token');
+
 if ($fails > 0) {
     fwrite(STDERR, "{$fails} test(s) failed\n");
     exit(1);
