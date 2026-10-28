@@ -35,6 +35,16 @@ bool load_config(const std::string& path, Config& out, std::string& err) {
             }
         } else if (key == "data_dir") {
             out.data_dir = val;
+        } else if (key == "models_dir") {
+            out.models_dir = val;
+        } else if (key == "threads") {
+            try {
+                int n = std::stoi(val);
+                if (n >= 1 && n <= 8) out.threads = n;  // beyond 8 helps nothing on this class of NAS
+            } catch (...) {
+                // Unparseable threads= keeps the default; a bad value must
+                // not break the scan config too.
+            }
         }
     }
     if (out.roots.empty()) {

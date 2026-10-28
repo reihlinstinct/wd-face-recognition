@@ -146,6 +146,72 @@ int main() {
     check(c10.added == 0 && c10.changed == 0,
           "deep photo survived the capped scan untouched");
 
+    // Face-pipeline DB contract (issue #40 PR 2): queued_photos lists the
+    // queue, replace_faces swaps rows atomically and reports old crops,
+    // mark_failed records the reason. No ncnn involved at this layer.
+    // The scans above legitimately leave three photos queued: a.jpg (job3
+    // touch), sub/b.jpg (job5 reappearance), the deep photo (job8 add).
+    {
+        std::vector<wfi::QueuedPhoto> q;
+        check(db.queued_photos(100, q, err), "queue query succeeds");
+        check(q.size() == 3, "three photos queued from the scans above");
+        long aid = 0, bid = 0;
+        int64_t asz = 0, amt = 0, bsz = 0, bmt = 0;
+        for (const auto& p : q) {
+            if (p.path == root + "/a.jpg") { aid = p.id; asz = p.size; amt = p.mtime; }
+            if (p.path == root + "/sub/b.jpg") { bid = p.id; bsz = p.size; bmt = p.mtime; }
+        }
+        check(aid > 0 && bid > 0, "queued ids resolved");
+
+        wfi::FaceRow r1;
+        r1.bbox = "1,2,3,4";
+        r1.embedding = {0.5f, -0.25f, 1.0f};
+        r1.crop_path = "crops/p" + std::to_string(aid) + "_f0.jpg";
+        std::vector<std::string> oldc;
+        bool conflict = true;  // must come back false on a clean commit
+        check(db.replace_faces(aid, asz, amt, {r1}, oldc, conflict, err) && !conflict,
+              "first replace_faces commits");
+        check(oldc.empty(), "no old crops on first process");
+        check(db.queued_photos(100, q, err) && q.size() == 2, "processed photo leaves the queue");
+
+        // Second round (reprocess): the old crop path comes back so the
+        // caller can unlink the stale file.
+        wfi::FaceRow r2;
+        r2.bbox = "5,6,7,8";
+        r2.embedding = {0.1f};
+        r2.crop_path = "crops/p" + std::to_string(aid) + "_f0.jpg";
+        oldc.clear();
+        // The guard only commits from 'queued' state: after the first
+        // replace the photo is 'scanned', so an immediate second replace
+        // conflicts (production re-processing always re-queues via a scan).
+        conflict = false;
+        check(!db.replace_faces(aid, asz, amt, {r2}, oldc, conflict, err) && conflict,
+              "scanned photo refuses a blind re-replace");
+        check(oldc.empty(), "refused commit reports no crops to unlink");
+        // Re-queue the photo (changed mtime), as the walk would.
+        long jobq = db.begin_job(root);
+        check(db.observe(jobq, root, root + "/a.jpg", asz, amt + 1, err) == 2,
+              "changed photo re-queued");
+        // A stale version (the pre-change mtime) must NOT commit either.
+        conflict = false;
+        check(!db.replace_faces(aid, asz, amt, {r2}, oldc, conflict, err) && conflict,
+              "stale version refuses to commit");
+        conflict = true;
+        check(db.replace_faces(aid, asz, amt + 1, {r2}, oldc, conflict, err) && !conflict,
+              "second replace_faces commits");
+        check(oldc.size() == 1 && oldc[0] == r1.crop_path, "old crop path reported");
+
+        // A failed photo carries its reason and leaves the queue.
+        conflict = false;
+        check(!db.mark_failed(bid, bsz, bmt + 1, "decode", conflict, err) && conflict,
+              "stale mark_failed refuses");
+        conflict = true;
+        check(db.mark_failed(bid, bsz, bmt, "decode", conflict, err) && !conflict,
+              "mark_failed commits");
+        check(db.queued_photos(100, q, err) && q.size() == 1, "failed photo leaves the queue");
+        check(db.queued_count() == 1, "queued_count reports the real queue depth");
+    }
+
     if (fails > 0) {
         std::fprintf(stderr, "%d test(s) failed\n", fails);
         return 1;

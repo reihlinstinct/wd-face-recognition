@@ -1,0 +1,184 @@
+#include "process.h"
+
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <ctime>
+#include <set>
+#include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
+
+#include <net.h>
+
+#include "align.h"
+#include "db.h"
+#include "detect.h"
+#include "jpegio.h"
+
+namespace wfi {
+
+namespace {
+
+// Crops are JPEGs under data_dir/crops; the DB stores the relative path.
+// Unlink only ever touches that one directory, and only basenames the DB
+// itself recorded (a crop_path with a slash or ".." never reaches unlink).
+bool safe_crop_rel(const std::string& rel) {
+    return rel.rfind("crops/p", 0) == 0 && rel.find('/') == 5 &&
+           rel.find("..") == std::string::npos;
+}
+
+}  // namespace
+
+namespace {
+
+// Crop output must be usable BEFORE any model load or queue read
+// (CodeRabbit #45): an unwritable data_dir would otherwise fail every
+// photo's crop write and mark them all failed, with no automatic retry.
+bool ensure_crop_dir(const std::string& data_dir, std::string& err) {
+    for (const std::string& dir : {data_dir, data_dir + "/crops"}) {
+        if (mkdir(dir.c_str(), 0777) != 0 && errno != EEXIST) {
+            err = "cannot create " + dir + ": " + std::strerror(errno);
+            return false;
+        }
+        struct stat st;
+        if (stat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            err = dir + " exists but is not a directory";
+            return false;
+        }
+        if (access(dir.c_str(), W_OK) != 0) {
+            err = dir + " is not writable: " + std::strerror(errno);
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+bool process_queued(Db& db, const std::string& models_dir,
+                    const std::string& data_dir, int threads, long limit,
+                    ProcessCounts& counts, std::string& err) {
+    if (!ensure_crop_dir(data_dir, err)) return false;
+
+    ncnn::Net det, rec;
+    wfp::load_net(det, models_dir, "scrfd_500m", threads);
+    wfp::load_net(rec, models_dir, "mobilefacenet", threads);
+
+    // Per-run crop stamp: replacement crops are written to NEW paths
+    // (crops/p<id>_t<stamp>_f<n>.jpg) and the DB rows point at them, so a
+    // failed encode or a rolled-back replace_faces never touches bytes the
+    // committed rows still reference (CodeRabbit #45). Old paths are
+    // unlinked only after the commit.
+    const long run_stamp = (long)std::time(nullptr);
+
+    std::vector<QueuedPhoto> queue;
+    if (!db.queued_photos(limit, queue, err)) return false;
+    for (const QueuedPhoto& q : queue) {
+        wfp::RgbImage img = wfp::decode_jpeg(q.path);
+        if (img.pixels.empty()) {
+            bool conflict = false;
+            if (!db.mark_failed(q.id, q.size, q.mtime, "decode", conflict, err)) {
+                if (conflict) {
+                    // Changed under us: leave the newer queue entry alone.
+                    ++counts.requeued;
+                    continue;
+                }
+                err = "mark_failed: " + err;
+                return false;
+            }
+            ++counts.failed;
+            std::fprintf(stderr, "skip undecodable %s\n", q.path.c_str());
+            continue;
+        }
+        std::vector<wfp::Face> faces = wfp::scrfd_detect(det, img);
+        std::vector<FaceRow> rows;
+        std::vector<std::string> new_crops;
+        bool crop_failed = false;
+        int fi = 0;
+        for (const wfp::Face& f : faces) {
+            wfp::RgbImage chip = wfp::align_chip(img, f.kps);
+            if (chip.pixels.empty()) chip = wfp::crop_chip(img, f.x0, f.y0, f.x1, f.y1);
+            if (chip.pixels.empty()) continue;  // degenerate box
+            FaceRow r;
+            char bbox[64];
+            std::snprintf(bbox, sizeof(bbox), "%d,%d,%d,%d",
+                          (int)f.x0, (int)f.y0, (int)f.x1, (int)f.y1);
+            r.bbox = bbox;
+            r.embedding = wfp::arcface_embed(rec, chip);
+            r.crop_path = "crops/p" + std::to_string(q.id) + "_t" +
+                          std::to_string(run_stamp) + "_f" +
+                          std::to_string(fi) + ".jpg";
+            if (!wfp::encode_jpeg(chip.pixels.data(), chip.w, chip.h,
+                                  data_dir + "/" + r.crop_path)) {
+                std::fprintf(stderr, "crop write failed for %s\n",
+                             r.crop_path.c_str());
+                crop_failed = true;
+                break;
+            }
+            new_crops.push_back(r.crop_path);
+            rows.push_back(std::move(r));
+            ++fi;
+        }
+        if (crop_failed) {
+            // A photo with partial output must not be recorded as scanned
+            // (CodeRabbit #45): mark it failed so the miss is visible, and
+            // drop this run's staged crops (never referenced by any row).
+            // The photo leaves the queue in state 'failed'; a later scan
+            // re-queues it only when the file changes - retrying transient
+            // I/O failures is the operator's call (or a future
+            // retry-failed command).
+            for (const std::string& c : new_crops)
+                if (safe_crop_rel(c)) unlink((data_dir + "/" + c).c_str());
+            bool conflict = false;
+            if (!db.mark_failed(q.id, q.size, q.mtime, "crop write", conflict, err)) {
+                if (conflict) {
+                    ++counts.requeued;
+                    continue;
+                }
+                err = "mark_failed: " + err;
+                return false;
+            }
+            ++counts.failed;
+            continue;
+        }
+        std::vector<std::string> old_crops;
+        bool conflict = false;
+        if (!db.replace_faces(q.id, q.size, q.mtime, rows, old_crops, conflict, err)) {
+            // Nothing committed: this run's staged crops are referenced by
+            // nothing and always go away.
+            for (const std::string& c : new_crops)
+                if (safe_crop_rel(c)) unlink((data_dir + "/" + c).c_str());
+            if (conflict) {
+                // A concurrent scan saw the file change and re-queued it:
+                // that newer queue entry wins, this run's embeddings are
+                // stale. Left queued for the next process run.
+                ++counts.requeued;
+                std::fprintf(stderr, "%s changed during processing, left queued\n",
+                             q.path.c_str());
+                continue;
+            }
+            err = "replace_faces: " + err;
+            return false;
+        }
+        // Committed: stale crops from a previous processing round go away.
+        // Only paths the DB itself returned, and never ones just rewritten.
+        const std::set<std::string> keep(new_crops.begin(), new_crops.end());
+        for (const std::string& c : old_crops)
+            if (safe_crop_rel(c) && keep.count(c) == 0)
+                unlink((data_dir + "/" + c).c_str());
+        ++counts.processed;
+        counts.faces += (long)rows.size();
+        std::printf("%s: faces=%zu\n", q.path.c_str(), rows.size());
+    }
+    long remaining = db.queued_count();  // real count, not a one-row probe
+    if (remaining < 0) {
+        err = "could not count the remaining queue";
+        return false;
+    }
+    counts.remaining = remaining;
+    return true;
+}
+
+}  // namespace wfi

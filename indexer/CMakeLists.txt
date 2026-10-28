@@ -14,6 +14,24 @@ target_include_directories(sqlite3 PUBLIC third_party)
 add_executable(wdf_indexer src/main.cpp src/config.cpp src/db.cpp src/walk.cpp)
 target_link_libraries(wdf_indexer PRIVATE sqlite3 pthread dl)
 
+# Face-processing daemon (issue #40 PR 2): needs ncnn + libjpeg, so it is
+# off by default - CI's plain-g++ indexer job and the NAS-less local build
+# stay dependency-free.
+option(WDF_FACES "Build wdf_faces (needs ncnn + libjpeg)" OFF)
+if(WDF_FACES)
+    find_package(ncnn REQUIRED PATHS ${NCNN_INSTALL_DIR}/lib/cmake/ncnn NO_DEFAULT_PATH)
+    find_package(OpenMP REQUIRED)
+    find_path(JPEG_INCLUDE_DIR jpeglib.h REQUIRED)
+    find_library(JPEG_LIBRARY NAMES jpeg REQUIRED)
+    set(WDF_PIPELINE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../pipeline/src)
+    add_executable(wdf_faces
+        src/faces_main.cpp src/process.cpp src/config.cpp src/db.cpp
+        ${WDF_PIPELINE_DIR}/align.cpp ${WDF_PIPELINE_DIR}/detect.cpp
+        ${WDF_PIPELINE_DIR}/jpegio.cpp)
+    target_include_directories(wdf_faces PRIVATE ${WDF_PIPELINE_DIR} ${JPEG_INCLUDE_DIR})
+    target_link_libraries(wdf_faces PRIVATE sqlite3 ncnn ${JPEG_LIBRARY} OpenMP::OpenMP_CXX pthread dl)
+endif()
+
 option(WDF_INDEXER_TESTS "Build the indexer unit tests" OFF)
 if(WDF_INDEXER_TESTS)
     enable_testing()
