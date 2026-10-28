@@ -68,7 +68,6 @@ std::string person_json(const PersonSummary& who,
     return o;
 }
 
-
 bool recluster(Db& db, double threshold, ClusterCounts& counts,
                std::string& err) {
     std::vector<ClusterFace> faces;

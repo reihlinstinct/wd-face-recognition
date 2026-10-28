@@ -1,7 +1,7 @@
 <?php
 // Person page (issue #50, 0.3.0 PR 3d): every face the index assigned to
-// one cluster, with the photo each crop came from. PIN-gated like the
-// other private pages.
+// one cluster. Source photo paths are NOT shown (per-folder visibility
+// plan, review #58). PIN-gated like the other private pages.
 require_once __DIR__ . '/auth.php';
 wdf_session_start();
 require_once __DIR__ . '/paths.php';
@@ -48,7 +48,6 @@ body { font-family: sans-serif; margin: 1.5em; background: #f6f6f6; }
 figure { margin: 0; background: #fff; border: 1px solid #ddd;
     border-radius: 6px; padding: .5em; width: 150px; }
 figure img { width: 100%; border-radius: 4px; background: #eee; }
-figcaption { font-size: .75em; color: #555; word-break: break-all; }
 .msg { padding: .6em; border-radius: 4px; background: #fdd; margin-bottom: 1em; }
 </style>
 </head>

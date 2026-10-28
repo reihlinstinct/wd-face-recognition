@@ -74,7 +74,9 @@ check(strpos($html, 'crop.php?f=p2_t1_f0.jpg') !== false,
 $faceHtml = wdf_person_face_html(['id' => 9, 'bbox' => '0,0,1,1',
     'crop' => 'crops/p9_t1_f0.jpg',
     'photo' => '/shares/Photos/<script>.jpg']);
-check(strpos($faceHtml, '<script>') === false, 'photo path escaped');
+check(strpos($faceHtml, '<script>') === false, 'photo path not rendered');
+check(strpos($faceHtml, 'Photos') === false,
+    'source photo path never reaches the person page (review #58)');
 
 // --- post id parsing ------------------------------------------------------
 check(wdf_post_id('42') === 42, 'digits parse');

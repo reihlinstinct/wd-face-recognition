@@ -143,12 +143,13 @@ function wdf_person_card_html(array $p): string
         . '<span class="count">' . $faces . ' faces</span></a>';
 }
 
+// The crop grid deliberately does NOT show the source photo path: full
+// paths conflict with the planned per-folder visibility rules (review #58).
 function wdf_person_face_html(array $f): string
 {
     $crop = htmlspecialchars(basename($f['crop']), ENT_QUOTES, 'UTF-8');
-    $photo = htmlspecialchars($f['photo'], ENT_QUOTES, 'UTF-8');
     return '<figure><img src="crop.php?f=' . $crop . '" alt="" loading="lazy">'
-        . '<figcaption>' . $photo . '</figcaption></figure>';
+        . '</figure>';
 }
 
 // POST ids arrive as strings; only plain positive ints pass.

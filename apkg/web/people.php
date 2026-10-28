@@ -60,6 +60,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $to = wdf_post_id((string)($_POST['to'] ?? ''));
             if ($from === null || $to === null || $from === $to) {
                 $msg = 'Pick two different people to merge.';
+            } elseif (empty($_POST['confirm'])) {
+                $msg = 'Tick the confirmation box - a merge cannot be undone.';
             } else {
                 [$rc, $out] = wdf_faces_call($appDir,
                     ['merge', '--config', $configPath,
@@ -164,6 +166,8 @@ section { background: #fff; border: 1px solid #ddd; border-radius: 6px;
 <option value="<?= (int)$p['id'] ?>"><?= htmlspecialchars(wdf_person_label($p), ENT_QUOTES, 'UTF-8') ?></option>
 <?php endforeach; ?>
 </select></label>
+<label><input type="checkbox" name="confirm" value="1" required>
+I understand a merge cannot be undone.</label>
 <button type="submit">Merge</button>
 </form>
 </section>
