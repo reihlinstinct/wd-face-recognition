@@ -572,8 +572,47 @@ int main() {
             sqlite3_close(raw);
         }
 
+        // person_faces ordering (mutant: ORDER BY f.id instead of
+        // p.path, f.id): queue z2.jpg BEFORE a2.jpg so the z-face gets the
+        // lower face id but the higher path; photo-path order must win.
+        write_file(root + "/z2.jpg", "z2-bytes");
+        write_file(root + "/a2.jpg", "a2-bytes");
+        long jobo = db.begin_job(root);
+        check(db.observe(jobo, root, root + "/z2.jpg", 8, 1000, err) == 1, "z2 queued");
+        check(db.observe(jobo, root, root + "/a2.jpg", 8, 1000, err) == 1, "a2 queued");
+        check(db.flush(), "ordering batch committed");
+        long z2id = 0, a2id = 0;
+        int64_t z2sz = 0, z2mt = 0, a2sz = 0, a2mt = 0;
+        check(db.queued_photos(100, pq, err), "ordering queue readable");
+        for (const auto& qq : pq) {
+            if (qq.path == root + "/z2.jpg") { z2id = qq.id; z2sz = qq.size; z2mt = qq.mtime; }
+            if (qq.path == root + "/a2.jpg") { a2id = qq.id; a2sz = qq.size; a2mt = qq.mtime; }
+        }
+        check(z2id > 0 && a2id > 0 && z2id < a2id, "z2 queued before a2");
+        seed_face(z2id, z2sz, z2mt, 0.3f, "crops/z2_t1_f0.jpg");
+        seed_face(a2id, a2sz, a2mt, 0.4f, "crops/a2_t1_f0.jpg");
+        long zface = 0, a2face = 0;
+        check(db.all_face_embeddings(cf, err), "faces re-read");
+        for (const auto& f : cf) {
+            if (f.photo_id == z2id) zface = f.id;
+            if (f.photo_id == a2id) a2face = f.id;
+        }
+        check(zface > 0 && a2face > 0 && zface < a2face,
+              "z-face id below a-face id");
+        check(db.replace_clusters({{aface, p1face, p2face}, {zface, a2face}}, err),
+              "ordering recluster commits");
+        check(db.people_list(pl, err), "people_list after ordering recluster");
+        long c_pair = 0;
+        for (const auto& ps : pl)
+            if (ps.cover_crop == "crops/z2_t1_f0.jpg") c_pair = ps.id;
+        check(c_pair > 0, "pair cluster resolved");
+        check(db.person_faces(c_pair, pf, err) && pf.size() == 2 &&
+                  pf[0].photo_path == root + "/a2.jpg" &&
+                  pf[1].photo_path == root + "/z2.jpg",
+              "person faces ordered by photo path, not face id");
+
         // Ima's cluster id for any later block.
-        check(db.people_list(pl, err) && pl.size() == 1 && pl[0].name == "Ima",
+        check(db.people_list(pl, err) && pl.size() == 2 && pl[0].name == "Ima",
               "final state: one named person");
         first_id = pl[0].id;
     }
