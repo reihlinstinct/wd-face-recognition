@@ -17,12 +17,15 @@ require_once __DIR__ . '/paths.php';
 require_once __DIR__ . '/run.php';
 require_once __DIR__ . '/browse.php';
 require_once __DIR__ . '/status.php';
-$version = '0.2.4';
+require_once __DIR__ . '/settings.php';
+$version = '0.2.5';
 $appDir = realpath(dirname(__DIR__));
 $demoBin = $appDir . '/bin/wdf_demo';
 $modelsDir = $appDir . '/models';
 $reportsDir = '/shares/facerecog-reports';
-$demoOut = $reportsDir . '/demo-out';
+// Configurable output folder (issue #43): read AFTER a possible
+// set_output POST below; $demoOut is (re)assigned there.
+$demoOut = wdf_output_dir($reportsDir);
 $runLog = $demoOut . '/run.log';
 $lockFile = $reportsDir . '/.demo.lock';
 $pinFile = getenv('WDF_PIN_FILE') !== false ? (string)getenv('WDF_PIN_FILE') : $reportsDir . '/demo-pin.txt';
@@ -69,6 +72,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $msg = 'Form token mismatch - reload the page and try again.';
     } elseif (!wdf_pin_session_ok($pinFile)) {
         $msg = 'Wrong demo PIN. Read it from ' . $pinFile . ' over SMB or the My Cloud app. If the share or file is missing, toggle the app off and back on to regenerate both with a fresh PIN.';
+    } elseif ($action === 'set_output') {
+        // Configurable output folder (issue #43). Same serialization as a
+        // run launch (CodeRabbit PR #44): moving the output folder while a
+        // run writes to it would strand the job's log and results.
+        $lock = @fopen($lockFile, 'c');
+        if (!$lock) {
+            $msg = 'Cannot create the run lock in the facerecog-reports share'
+                . ' - check that the share exists and is writable.';
+        } elseif (!flock($lock, LOCK_EX | LOCK_NB)) {
+            fclose($lock);
+            $msg = 'A demo run is in progress - change the output folder when it finishes.';
+        } else {
+            if (wdf_demo_status_live($runLog)['state'] === 'running') {
+                $msg = 'A demo run is in progress - change the output folder when it finishes.';
+            } else {
+                $setErr = wdf_set_output_dir((string)($_POST['output_dir'] ?? ''), $reportsDir);
+                $msg = $setErr === ''
+                    ? 'Output folder updated - the existing results were moved there.'
+                    : $setErr;
+                $demoOut = wdf_output_dir($reportsDir);
+                $runLog = $demoOut . '/run.log';
+                $status = wdf_demo_status_live($runLog);
+            }
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
     } elseif ($action === 'cancel') {
         // Signal the demo only while the logged PID still belongs to the
         // demo binary (CodeRabbit PR #34): after a crash or NAS reboot the
@@ -97,9 +126,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // its own output mid-run and puts the cleanup inside the
             // chosen tree. Resolved paths: "/shares/x/./demo-out" slips
             // past a raw prefix compare.
-            $msg = 'That folder overlaps the demo output folder (facerecog-reports/demo-out),'
+            $msg = 'That folder overlaps the demo output folder (' . $demoOut . '),'
                 . ' which is wiped and rewritten on each run - choose a different photo folder.';
         } else {
+            // Legacy (pre-0.2.5) default output has no marker; backfill it
+            // so the replaceable check below recognizes app content.
+            if ($demoOut === wdf_default_output($reportsDir)
+                && is_file($demoOut . '/index.html')) {
+                wdf_mark_output_dir($demoOut);
+            }
             if (!is_dir($demoOut)) {
                 @mkdir($demoOut, 0777, true);
             }
@@ -121,6 +156,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $ok = false;
                 if ($lockedStatus['state'] === 'running') {
                     $msg = 'A demo run is already in progress - its progress is shown below.';
+                } elseif (!wdf_output_dir_replaceable($demoOut)) {
+                    // The configured folder holds files this app did not
+                    // create: never wipe them (issue #43).
+                    $msg = 'The output folder is not empty and was not created by this app'
+                        . ' - refusing to replace it. Pick another output folder below'
+                        . ' or empty it yourself.';
                 } else {
                     // Fixed output path: previous demo output is replaced,
                     // never mixed (same guarantee the sync runner had). A
@@ -130,8 +171,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     exec('rm -rf ' . escapeshellarg($demoOut) . ' 2>/dev/null', $rmLines, $rmRc);
                     if ($rmRc !== 0 || !@mkdir($demoOut, 0777, true)) {
                         $msg = 'Could not reset the demo output folder - nothing was started.'
-                            . ' Check that the facerecog-reports share is writable.';
+                            . ' Check that the output share is writable.';
                     } else {
+                        wdf_mark_output_dir($demoOut);
                         // Async launch (issue #33): detached background job,
                         // output to run.log; survives the browser disconnecting.
                         $ok = wdf_run_demo_async([$demoBin, $photosDir, $modelsDir, $demoOut, '2'], $runLog);
@@ -253,6 +295,25 @@ If the share or the file is missing, toggle the app off and back on
 <button type="submit">Run demo</button>
 </form>
 <?= $browseHtml ?>
+
+<h2>Output folder</h2>
+<form method="post">
+<input type="hidden" name="csrf" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
+<input type="hidden" name="action" value="set_output">
+<?php if (!wdf_pin_session_ok($pinFile)): ?>
+<label for="pin-output">Demo PIN</label> (required to change settings):<br>
+<input type="password" id="pin-output" name="pin" autocomplete="one-time-code"
+       autocapitalize="off" autocorrect="off" spellcheck="false" required><br>
+<?php endif; ?>
+<label for="output_dir">Results folder</label> - current: <b><?= htmlspecialchars($demoOut, ENT_QUOTES, 'UTF-8') ?></b><br>
+<span class="hint">A subfolder inside any existing share (not a share itself). Changing it MOVES the
+existing results there. Every run replaces the folder's contents, and the app refuses to touch a
+folder it did not create. תיקיית התוצאות - אפשר לבחור תיקייה בתוך כל שיתוף קיים, והתוצאות הקיימות מועברות אליה.</span><br>
+<input type="text" id="output_dir" name="output_dir"
+       placeholder="/shares/facerecog-reports/demo-out" required><br>
+<button type="submit">Change output folder</button>
+</form>
+
 <?php if ($msg !== ''): ?>
 <p class="msg"><?= $msg ?></p>
 <?php endif; ?>

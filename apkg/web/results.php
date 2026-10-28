@@ -7,9 +7,12 @@
 require_once __DIR__ . '/auth.php';
 wdf_session_start();
 require_once __DIR__ . '/paths.php';
+require_once __DIR__ . '/settings.php';
 
 $reportsDir = '/shares/facerecog-reports';
-$demoOut = $reportsDir . '/demo-out';
+// Configurable output folder (issue #43): results are served from the
+// folder chosen on the app page (validated there; this stays a read).
+$demoOut = wdf_output_dir($reportsDir);
 $pinFile = getenv('WDF_PIN_FILE') !== false ? (string)getenv('WDF_PIN_FILE') : $reportsDir . '/demo-pin.txt';
 
 // Auth comes BEFORE any content: the crops are the user's private face
@@ -49,6 +52,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 header('Content-Type: text/html; charset=utf-8');
 header('Cache-Control: no-store');
+// The served index.html lives on a user-writable share (issue #43): anyone
+// with share access could inject markup/JS into this origin. The generated
+// page is fully static, so forbid everything but same-origin images and
+// inline styles - injected scripts, forms and frames simply never run
+// (CodeRabbit PR #44).
+header("Content-Security-Policy: default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
 
 if (!wdf_pin_session_ok($pinFile)) {
     ?>

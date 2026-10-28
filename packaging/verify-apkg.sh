@@ -20,7 +20,7 @@ SIGN_KEY="Lidho.mdk3K3h"
 
 # Release metadata this gate enforces (not just internal agreement between
 # header and apkg.rc). Override per release: EXPECTED_VERSION=0.2.2 ...
-EXPECTED_VERSION="${EXPECTED_VERSION:-0.2.4}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-0.2.5}"
 EXPECTED_MINFW="${EXPECTED_MINFW:-5.27.100}"
 
 BIN_PATH="${1:-}"
