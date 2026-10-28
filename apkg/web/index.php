@@ -114,7 +114,8 @@ All processing in this app stays on this NAS.</p>
 <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
 <label for="pin">Demo PIN</label> (read it from <?= htmlspecialchars($pinFile, ENT_QUOTES, 'UTF-8') ?>
 via the WD dashboard file manager or SMB):<br>
-<input type="password" id="pin" name="pin" required><br><br>
+<input type="password" id="pin" name="pin" autocomplete="one-time-code"
+       autocapitalize="off" autocorrect="off" spellcheck="false" required><br><br>
 <label for="photos_dir">Photo folder</label> (absolute path under /shares/; subfolders are scanned too, up to 8 levels and 1000 photos per run; spaces and Hebrew names are fine - paste as-is, no backslashes needed):<br>
 <input type="text" id="photos_dir" name="photos_dir"
        placeholder="/shares/Public/demo-photos"
