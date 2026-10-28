@@ -158,8 +158,9 @@ int main() {
                 // data was never touched. Under the cap the same file must
                 // fail with "decode" (control: the trap works).
                 std::string bytes;
-                {
-                    FILE* rf = std::fopen(p.c_str(), "rb");
+                FILE* rf = std::fopen(p.c_str(), "rb");
+                check(rf != nullptr, "trap fixture reopens for read");
+                if (rf) {
                     fseek(rf, 0, SEEK_END);
                     long sz = ftell(rf);
                     fseek(rf, 0, SEEK_SET);
@@ -169,14 +170,21 @@ int main() {
                 }
                 size_t sos = bytes.find("\xff\xda");
                 check(sos != std::string::npos, "progressive fixture has SOS");
+                bool armed = false;
                 if (sos != std::string::npos) {
                     const size_t seglen = ((unsigned char)bytes[sos + 2] << 8) |
                                           (unsigned char)bytes[sos + 3];
                     bytes.resize(sos + 2 + seglen);
                     bytes += "\xff\xde";  // undefined marker: hard error if read
                     FILE* wf = std::fopen(p.c_str(), "wb");
-                    fwrite(bytes.data(), 1, bytes.size(), wf);
-                    fclose(wf);
+                    check(wf != nullptr, "trap fixture reopens for write");
+                    if (wf) {
+                        armed = fwrite(bytes.data(), 1, bytes.size(), wf) == bytes.size() &&
+                                fclose(wf) == 0;
+                    }
+                    check(armed, "trap fixture written completely");
+                }
+                if (armed) {
                     wfp::RgbImage trapped = wfp::decode_jpeg(p, &reason, 1000);
                     check(trapped.pixels.empty() && reason == "too large",
                           "oversized refused before touching corrupt scan data");
