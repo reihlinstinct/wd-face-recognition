@@ -50,6 +50,16 @@ check(r.returncode == 2 and "not valid for cluster" in r.stderr,
 r = run("process", "--config", conf, "--threshold", "0.5")
 check(r.returncode == 2 and "not valid for process" in r.stderr,
       "process refuses --threshold")
+
+# The process dispatch path itself (CodeRabbit #76): with valid options
+# the run must reach process_queued - in this binary the stub, which
+# fails with its marker error. A dispatch break cannot pass this suite.
+r = run("process", "--config", conf, "--models", "/m")
+check(r.returncode == 1 and "process failed: process_queued stub" in r.stderr,
+      "valid process options reach the stub")
+r = run("process", "--config", conf)
+check(r.returncode == 2 and "no models dir" in r.stderr,
+      "process without models refused")
 r = run("person", "--config", conf, "--id", "abc")
 check(r.returncode == 2 and "bad --id" in r.stderr, "junk id refused")
 r = run("person", "--config", conf, "--id", "0")
