@@ -105,7 +105,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($lockedStatus['state'] === 'running') {
                     $msg = 'A demo run is already in progress - its progress is shown below.';
                 } else {
-                    @unlink($runLog);
+                    // Fixed output path: previous demo output is replaced,
+                    // never mixed (same guarantee the sync runner had).
+                    exec('rm -rf ' . escapeshellarg($demoOut));
+                    @mkdir($demoOut, 0777, true);
                     // Async launch (issue #33): detached background job,
                     // output to run.log; survives the browser disconnecting.
                     $ok = wdf_run_demo_async([$demoBin, $photosDir, $modelsDir, $demoOut, '2'], $runLog);
