@@ -5,7 +5,7 @@ Thanks for helping with on-device face clustering and naming for the WD PR4100 N
 ## Ground rules
 
 - Keep face processing and all photo data on the NAS. Do not add real photos, face embeddings, names linked to real people, or private NAS data to this public repository, issues, PRs, tests, CI artifacts, or logs.
-- Use synthetic fixtures only. Do not send images or embeddings to external services, including for development or diagnostics.
+- Use synthetic fixtures only. Do not send images or embeddings to external services, including for development or diagnostics. One documented exception (#55): CI end-to-end checks may download the pinned public-domain portraits of deceased historical figures listed in demo/get-test-photos.sh (URL + sha256 pinned, /tmp-transient, never committed, never in CI artifacts).
 - Keep dependencies, permissions, and network access minimal. Document any new dependency and its license.
 - Performance-first: the target is a weak device (N3710, 4 GB RAM), so efficiency is a feature in every change. Stay within the component budgets in docs/DESIGN.md (section 2a: memory, CPU, startup time, page payload); use the smallest model that meets the accuracy bar; stream rather than load (bounded queues, no whole-library structures in RAM); batch SQLite writes. Measure latency, memory, and payload impact of your change; do not merge over-budget regressions - once the CI benchmark gates exist they will enforce this automatically.
 - Do not include secrets, personal data, or private operational details in commits, logs, or examples.

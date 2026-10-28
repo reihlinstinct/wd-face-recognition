@@ -60,7 +60,13 @@ prerequisites. Read those before downloading dependencies or building artifacts.
 
 Keep photos, embeddings, names linked to real people and NAS diagnostics private.
 Use synthetic fixtures only in this public repository, tests and CI artifacts.
-Do not send photos or embeddings to cloud services. The intended product keeps
+One documented exception (#55): the CI end-to-end checks need faces a real
+detector fires on, which synthetic pixels cannot provide. They download three
+public-domain portraits of deceased historical figures (Lincoln, Hopper,
+Einstein) from Wikimedia Commons, each pinned by URL and sha256, into /tmp for
+the duration of the job only. They are never committed to the repository, and
+CI artifacts carry no image files (logs only). Do not send photos or embeddings
+to cloud services. The intended product keeps
 processing on the NAS and selects no folders until the owner chooses them.
 
 Open an issue before a focused PR. Include tests and limitations, use signed
