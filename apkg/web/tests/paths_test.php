@@ -69,6 +69,45 @@ check(!file_exists('/tmp/wdf-pwned'), 'no injection side effect');
 $quoted = escapeshellarg($prefix . "it's a dir");
 check(strpos($quoted, "'") === 0 && substr_count($quoted, "'\\''") === 1, 'escapeshellarg quotes safely');
 
+// wdf_path_is_within: the demo-out source guard (CodeRabbit PR #34).
+check(wdf_path_is_within('/shares/facerecog-reports/demo-out', '/shares/facerecog-reports/demo-out'),
+      'demo-out itself is within demo-out');
+check(wdf_path_is_within('/shares/facerecog-reports/demo-out/crops', '/shares/facerecog-reports/demo-out'),
+      'a demo-out subfolder is within demo-out');
+check(!wdf_path_is_within('/shares/facerecog-reports/demo-outside', '/shares/facerecog-reports/demo-out'),
+      'a sibling with a shared name prefix is NOT within demo-out');
+check(!wdf_path_is_within('/shares/facerecog-reports', '/shares/facerecog-reports/demo-out'),
+      'the parent share is not within demo-out');
+check(!wdf_path_is_within('/shares/Public/photos', '/shares/facerecog-reports/demo-out'),
+      'an unrelated folder is not within demo-out');
+
+// wdf_realpath_lenient: ./ and not-yet-existing tails resolve so the
+// demo-out source guard cannot be bypassed with a non-canonical path
+// (CodeRabbit PR #34).
+$rpTmp = sys_get_temp_dir() . '/wdf-rp-' . getmypid();
+@mkdir($rpTmp . '/demo-out/crops', 0777, true);
+check(wdf_realpath_lenient($rpTmp . '/demo-out') === realpath($rpTmp . '/demo-out'),
+      'existing path resolves to its realpath');
+check(wdf_realpath_lenient($rpTmp . '/missing/leaf') === realpath($rpTmp) . '/missing/leaf',
+      'missing tail is appended to the resolved ancestor');
+check(wdf_path_is_within(wdf_realpath_lenient($rpTmp . '/./demo-out/crops'),
+                         wdf_realpath_lenient($rpTmp . '/demo-out')),
+      'a ./ variant of a demo-out subfolder is caught by the resolved guard');
+check(!wdf_path_is_within(wdf_realpath_lenient($rpTmp . '/./other'),
+                          wdf_realpath_lenient($rpTmp . '/demo-out')),
+      'an unrelated ./ path still passes the resolved guard');
+
+// wdf_paths_overlap: the demo source guard rejects BOTH directions
+// (CodeRabbit PR #34): source inside demo-out, and source containing it.
+$ov = '/shares/facerecog-reports/demo-out';
+check(wdf_paths_overlap($ov, $ov), 'identical paths overlap');
+check(wdf_paths_overlap($ov . '/crops', $ov), 'source inside demo-out overlaps');
+check(wdf_paths_overlap('/shares/facerecog-reports', $ov), 'source containing demo-out overlaps');
+check(wdf_paths_overlap('/shares', $ov), 'the /shares root containing demo-out overlaps');
+check(!wdf_paths_overlap('/shares/Public/photos', $ov), 'unrelated folders do not overlap');
+check(!wdf_paths_overlap('/shares/facerecog-reports/demo-outside', $ov),
+      'shared-prefix sibling does not overlap');
+
 if ($fails > 0) {
     fwrite(STDERR, "{$fails} test(s) failed\n");
     exit(1);

@@ -59,3 +59,38 @@ function wdf_run_demo_shell(array $argv): array
     exec($cmd, $lines, $rc);
     return [$rc, $lines];
 }
+
+// Fire-and-forget demo launch (issue #33): the run must survive the browser
+// disconnecting, so the demo runs as a detached background job whose output
+// lands in $logFile, wrapped in machine lines: "start=<epoch>" and
+// "pid=<demo pid>" first, "exit=<rc>" last (see status.php). Returns true
+// when the job was launched.
+function wdf_run_demo_async(array $argv, string $logFile): bool
+{
+    if (PHP_VERSION_ID < 70400) {
+        return false; // argv-array exec is required for non-ASCII paths
+    }
+    // /bin/sh -c with positional parameters: every argument reaches the
+    // shell as raw bytes (no escaping, no locale dependence - the same
+    // guarantee the synchronous runner relies on). $1 is the log path, the
+    // rest is the command. The subshell backgrounds the demo, records its
+    // PID, waits, and appends the exit code; /bin/sh itself returns at once.
+    $wrapper = 'log="$1"; shift; '
+        . '( echo "start=$(date +%s)"; "$@" & pid=$!; echo "pid=$pid"; '
+        . 'wait $pid; printf "exit=%s\n" "$?" ) >>"$log" 2>&1 </dev/null &';
+    $desc = [
+        0 => ['file', '/dev/null', 'r'],
+        1 => ['file', '/dev/null', 'w'],
+        2 => ['file', '/dev/null', 'w'],
+    ];
+    $proc = proc_open(
+        array_merge(['/bin/sh', '-c', $wrapper, 'sh', $logFile], $argv),
+        $desc,
+        $pipes
+    );
+    if (!is_resource($proc)) {
+        return false;
+    }
+    $rc = proc_close($proc);
+    return $rc === 0;
+}
