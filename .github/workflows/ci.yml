@@ -82,6 +82,10 @@ jobs:
         # Configurable results folder: validation, migration, cleanup
         # safety contract (issue #43).
         run: php apkg/web/tests/settings_test.php
+      - name: People pages tests (PHP)
+        # People list/person/crop backend: config parsing, JSON shape,
+        # escaping, PIN-gated crop serving (issue #50).
+        run: php apkg/web/tests/people_test.php
   indexer-test:
     # wdf_indexer skeleton (issue #40): mtime-delta walk + SQLite index.
     runs-on: ubuntu-latest
