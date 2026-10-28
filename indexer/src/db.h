@@ -39,6 +39,29 @@ struct FaceRow {
     std::string crop_path;        // relative to data_dir
 };
 
+// One stored face with its embedding: the clustering input (PR 3).
+struct ClusterFace {
+    long id = 0;
+    long photo_id = 0;
+    std::vector<float> embedding;
+};
+
+// A person as the people page lists them (PR 3).
+struct PersonSummary {
+    long id = 0;
+    std::string name;        // empty when unnamed
+    long face_count = 0;
+    std::string cover_crop;  // crop_path of the cluster's first face
+};
+
+// A face as the person page lists it (PR 3).
+struct PersonFace {
+    long id = 0;
+    std::string bbox;
+    std::string crop_path;   // relative to data_dir
+    std::string photo_path;  // absolute
+};
+
 class Db {
 public:
     ~Db();
@@ -87,6 +110,34 @@ public:
     // (disk full / volume I/O error): the batch is NOT forgotten then, so
     // the caller fails the run instead of printing bogus counts.
     bool flush();
+
+    // --- People (issue #40 PR 3) ---
+
+    // Every stored face with its embedding, oldest first (cluster input).
+    // False on a query error.
+    bool all_face_embeddings(std::vector<ClusterFace>& out, std::string& err);
+    // Rewrites cluster assignments from computed groups in ONE
+    // transaction. A group inherits the id and name of the previous live
+    // cluster covering the most of its faces (each old cluster reused at
+    // most once); other groups get fresh rows; clusters left without
+    // members are deleted. Faces in no group end with cluster_id NULL.
+    bool replace_clusters(const std::vector<std::vector<long>>& groups,
+                          std::string& err);
+    // People page: live clusters, most faces first, cover = first face's
+    // crop. False on a query error.
+    bool people_list(std::vector<PersonSummary>& out, std::string& err);
+    // Person page: one cluster's faces with their photo paths.
+    // False on a query error (an unknown id is NOT an error, just empty).
+    bool person_faces(long cluster_id, std::vector<PersonFace>& out,
+                      std::string& err);
+    // Names a live cluster (empty name clears it). False when the id is
+    // not a live cluster or the write fails.
+    bool rename_cluster(long cluster_id, const std::string& name,
+                        std::string& err);
+    // Merges `from` into `to`: from's faces move, from is marked
+    // merged_into=to and leaves the people list. False when either id is
+    // not a live cluster, from == to, or the write fails.
+    bool merge_clusters(long from, long to, std::string& err);
 
 private:
     sqlite3* db_ = nullptr;
