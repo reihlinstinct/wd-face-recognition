@@ -655,22 +655,94 @@ int main() {
         char a0[] = "wdf_faces", a1[] = "cluster", a2[] = "--config",
              a3[] = "c.conf", a4[] = "--threshold", a5[] = "0.7";
         char* ok_argv[] = {a0, a1, a2, a3, a4, a5};
-        check(wfi::parse_cli_options(6, ok_argv, 2, opt, oerr) &&
+        check(wfi::parse_cli_options(6, ok_argv, 2, true, opt, oerr) &&
                   opt.config_path == "c.conf" && opt.threshold == 0.7,
               "valid options parse");
         char b2[] = "--bogus", b3[] = "1";
         char* bad_argv[] = {a0, a1, b2, b3};
-        check(!wfi::parse_cli_options(4, bad_argv, 2, opt, oerr) &&
+        check(!wfi::parse_cli_options(4, bad_argv, 2, true, opt, oerr) &&
                   oerr.find("unknown") != std::string::npos,
               "unknown option refused");
         char* trail_argv[] = {a0, a1, a4};
-        check(!wfi::parse_cli_options(3, trail_argv, 2, opt, oerr) &&
+        check(!wfi::parse_cli_options(3, trail_argv, 2, true, opt, oerr) &&
                   oerr.find("needs a value") != std::string::npos,
               "trailing valueless option refused");
         char t5[] = "abc";
         char* badth_argv[] = {a0, a1, a4, t5};
-        check(!wfi::parse_cli_options(4, badth_argv, 2, opt, oerr),
+        check(!wfi::parse_cli_options(4, badth_argv, 2, true, opt, oerr),
               "bad threshold refused at parse");
+    }
+
+    // Per-subcommand options (issue #69): cluster refuses process flags
+    // and vice versa, before the index opens.
+    {
+        wfi::CliOptions opt;
+        std::string oerr;
+        char a0[] = "wdf_faces", a1[] = "cluster", a2[] = "--limit",
+             a3[] = "10";
+        char* cross_argv[] = {a0, a1, a2, a3};
+        check(!wfi::parse_cli_options(4, cross_argv, 2, true, opt, oerr) &&
+                  oerr.find("not valid for cluster") != std::string::npos,
+              "cluster refuses --limit");
+        char t2[] = "--threshold", t3[] = "0.7";
+        char* cth_argv[] = {a0, a1, t2, t3};
+        check(!wfi::parse_cli_options(4, cth_argv, 2, false, opt, oerr) &&
+                  oerr.find("not valid for process") != std::string::npos,
+              "process refuses --threshold");
+        char m2[] = "--models", m3[] = "/m";
+        char* cm_argv[] = {a0, a1, m2, m3};
+        check(!wfi::parse_cli_options(4, cm_argv, 2, true, opt, oerr),
+              "cluster refuses --models");
+        char th2[] = "--threads", th3[] = "4";
+        char* cth2_argv[] = {a0, a1, th2, th3};
+        check(!wfi::parse_cli_options(4, cth2_argv, 2, true, opt, oerr),
+              "cluster refuses --threads");
+        char c2[] = "--config", c3[] = "c.conf", l2[] = "--limit", l3[] = "10";
+        char* pok_argv[] = {a0, a1, c2, c3, l2, l3};
+        check(wfi::parse_cli_options(6, pok_argv, 2, false, opt, oerr) &&
+                  opt.limit == 10,
+              "process accepts its own flags");
+    }
+
+    // Integer option validation (issue #69): full consume + range.
+    {
+        wfi::CliOptions opt;
+        std::string oerr;
+        char a0[] = "wdf_faces", a1[] = "process", f1[] = "--limit";
+        char v1[] = "10x";
+        char* junk_argv[] = {a0, a1, f1, v1};
+        check(!wfi::parse_cli_options(4, junk_argv, 2, false, opt, oerr),
+              "limit with trailing junk refused");
+        char v2[] = "0";
+        char* zero_argv[] = {a0, a1, f1, v2};
+        check(!wfi::parse_cli_options(4, zero_argv, 2, false, opt, oerr),
+              "limit 0 refused");
+        char v3[] = "-5";
+        char* neg_argv[] = {a0, a1, f1, v3};
+        check(!wfi::parse_cli_options(4, neg_argv, 2, false, opt, oerr),
+              "negative limit refused");
+        char v4[] = "100001";
+        char* big_argv[] = {a0, a1, f1, v4};
+        check(!wfi::parse_cli_options(4, big_argv, 2, false, opt, oerr),
+              "limit above cap refused");
+        char v5[] = "1";
+        char* edge_argv[] = {a0, a1, f1, v5};
+        check(wfi::parse_cli_options(4, edge_argv, 2, false, opt, oerr) &&
+                  opt.limit == 1,
+              "limit 1 is the valid edge");
+        char f2[] = "--threads", t1[] = "0";
+        char* tz_argv[] = {a0, a1, f2, t1};
+        check(!wfi::parse_cli_options(4, tz_argv, 2, false, opt, oerr),
+              "threads 0 refused");
+        char t2[] = "33";
+        char* tb_argv[] = {a0, a1, f2, t2};
+        check(!wfi::parse_cli_options(4, tb_argv, 2, false, opt, oerr),
+              "threads above cap refused");
+        char t3[] = "1";
+        char* te_argv[] = {a0, a1, f2, t3};
+        check(wfi::parse_cli_options(4, te_argv, 2, false, opt, oerr) &&
+                  opt.threads_override == 1,
+              "threads 1 is the valid edge");
     }
 
     // recluster (issue #50, PR 3b): union-find over stored embeddings at

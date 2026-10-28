@@ -32,10 +32,12 @@ struct CliOptions {
     double threshold = 0.5;  // demo-calibrated cosine cut
 };
 
-// Parses argv[first..] as flag/value pairs. Every flag needs a value and
-// must be known: unknown or incomplete options are rejected (issue #68)
-// BEFORE the caller opens the index.
-bool parse_cli_options(int argc, char** argv, int first, CliOptions& out,
-                       std::string& err);
+// Parses argv[first..] as flag/value pairs for the given subcommand.
+// Every flag needs a value, must be known, and must be supported by that
+// subcommand: cluster takes --config/--threshold only, process takes
+// --config/--models/--limit/--threads (issue #69). Violations are
+// rejected BEFORE the caller opens the index.
+bool parse_cli_options(int argc, char** argv, int first, bool is_cluster,
+                       CliOptions& out, std::string& err);
 
 }  // namespace wfi

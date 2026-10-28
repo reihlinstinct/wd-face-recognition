@@ -33,7 +33,7 @@ int main(int argc, char** argv) {
     // rewrite under the default threshold (issue #68).
     wfi::CliOptions opt;
     std::string err;
-    if (!wfi::parse_cli_options(argc, argv, 2, opt, err)) {
+    if (!wfi::parse_cli_options(argc, argv, 2, is_cluster, opt, err)) {
         std::fprintf(stderr, "%s\n", err.c_str());
         return 2;
     }
