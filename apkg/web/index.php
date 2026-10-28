@@ -231,7 +231,8 @@ progress{width:100%;height:1.4em}
 <body>
 <h1>WD Face Recognition</h1>
 <p>Version <?= htmlspecialchars($version, ENT_QUOTES, 'UTF-8') ?>.
-All processing in this app stays on this NAS.</p>
+All processing in this app stays on this NAS.
+<a href="people.php">People</a></p>
 
 <?php if ($status['state'] === 'running'): ?>
 <div class="runbox">
