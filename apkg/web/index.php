@@ -9,7 +9,9 @@
 // or SMB (/shares/facerecog-reports/demo-pin.txt), plus a per-session CSRF
 // token. Runs are serialized with an exclusive lock.
 session_start();
-$version = '0.2.0';
+require_once __DIR__ . '/paths.php';
+require_once __DIR__ . '/run.php';
+$version = '0.2.1';
 $appDir = realpath(dirname(__DIR__));
 $demoBin = $appDir . '/bin/wdf_demo';
 $modelsDir = $appDir . '/models';
@@ -36,10 +38,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($expectedPin === '' || !hash_equals($expectedPin, $pin)) {
         $msg = 'Wrong demo PIN. Read it from ' . $pinFile
             . ' via the WD dashboard file manager or SMB.';
-    } elseif ($photos === '' || strpos($photos, '/shares/') !== 0 || strpos($photos, '..') !== false) {
-        $msg = 'Enter an absolute folder path under /shares/ (for example /shares/Public/demo-photos).';
-    } elseif (!is_dir($photos)) {
-        $msg = 'Folder not found on this NAS: ' . htmlspecialchars($photos, ENT_QUOTES, 'UTF-8');
+    } elseif (($photosDir = wdf_normalize_photos_dir($photos)) === null) {
+        // Accepts shell-escaped spaces ("My\ Folder") and trailing slashes;
+        // guards (under /shares/, no "..") apply to the final resolved path.
+        $msg = 'Folder not found on this NAS: ' . htmlspecialchars($photos, ENT_QUOTES, 'UTF-8')
+            . ' - paste the path as shown in the file manager, spaces are fine, no backslashes needed.';
     } else {
         if (!is_dir($reportsDir)) {
             @mkdir($reportsDir, 0777, true);
@@ -50,9 +53,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             // Fixed output path: previous demo output is replaced, never mixed.
             exec('rm -rf ' . escapeshellarg($demoOut));
-            $cmd = escapeshellarg($demoBin) . ' ' . escapeshellarg($photos) . ' '
-                . escapeshellarg($modelsDir) . ' ' . escapeshellarg($demoOut) . ' 2 2>&1';
-            exec($cmd, $lines, $rc);
+            // No shell: argv array preserves non-ASCII (Hebrew) and spaced
+            // paths byte-for-byte under any LC_CTYPE (see run.php).
+            [$rc, $lines] = wdf_run_demo([$demoBin, $photosDir, $modelsDir, $demoOut, '2']);
             flock($lock, LOCK_UN);
             fclose($lock);
             $log = htmlspecialchars(implode("\n", (array)$lines), ENT_QUOTES, 'UTF-8');
@@ -92,7 +95,7 @@ All processing in this app stays on this NAS.</p>
 <label for="pin">Demo PIN</label> (read it from <?= htmlspecialchars($pinFile, ENT_QUOTES, 'UTF-8') ?>
 via the WD dashboard file manager or SMB):<br>
 <input type="password" id="pin" name="pin" required><br><br>
-<label for="photos_dir">Photo folder</label> (absolute path under /shares/):<br>
+<label for="photos_dir">Photo folder</label> (absolute path under /shares/; subfolders are scanned too, up to 8 levels and 1000 photos per run; spaces and Hebrew names are fine - paste as-is, no backslashes needed):<br>
 <input type="text" id="photos_dir" name="photos_dir"
        placeholder="/shares/Public/demo-photos" required><br><br>
 <button type="submit">Run demo</button>

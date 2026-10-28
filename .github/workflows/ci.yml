@@ -44,6 +44,19 @@ jobs:
       - run: pip install -r requirements-dev.txt
       # Coverage gate: >= 80% floor, enforced from day one (house standard).
       - run: python -m pytest -q --cov=src --cov-report=term --cov-fail-under=80
+  demo-scan-test:
+    # Recursive scanner unit tests (issue #24): no ncnn needed, plain g++.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: g++ -std=c++17 -O2 -Wall -Wextra demo/tests/scan_test.cpp demo/src/scan.cpp -o /tmp/scan_test
+      - run: /tmp/scan_test
+      - name: Demo web path-normalization tests (PHP)
+        # Spaces, shell-escapes, trailing slashes, Hebrew names (issue #24).
+        run: php apkg/web/tests/paths_test.php
+      - name: Demo runner argv tests (PHP)
+        # Hebrew/spaced/injection-shaped argv survive under LC_CTYPE=C (issue #24).
+        run: php apkg/web/tests/exec_test.php
   security:
     runs-on: ubuntu-latest
     steps:
