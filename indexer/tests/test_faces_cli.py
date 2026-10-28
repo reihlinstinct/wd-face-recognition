@@ -135,7 +135,7 @@ people = json.loads(r.stdout) if r.returncode == 0 else []
 check(all(p["id"] != old_id for p in people), "merged-away person is gone")
 kept = [p for p in people if p["id"] == keep_id]
 check(kept and kept[0]["name"] == "Keep", "named merge target keeps its name")
-check(kept[0]["faces"] == 1, "merge moved the face to the target")
+check(kept and kept[0]["faces"] == 1, "merge moved the face to the target")
 r = run("person", "--config", conf, "--id", str(keep_id))
 person = json.loads(r.stdout) if r.returncode == 0 else {}
 check(person.get("faces") and person["faces"][0]["crop"] == "crops/seed.jpg",
