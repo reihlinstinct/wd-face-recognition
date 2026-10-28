@@ -725,14 +725,17 @@ int main() {
         char* big_argv[] = {a0, a1, f1, v4};
         check(!wfi::parse_cli_options(4, big_argv, 2, "process", opt, oerr),
               "limit above cap refused");
+        // Overflow-length input is refused END-TO-END (issue #70): strtol
+        // clamps and the range check rejects it; this does not pin the
+        // errno branch in parse_long_range (review #74).
         char v9[] = "99999999999999999999999";
         char* ovf_argv[] = {a0, a1, f1, v9};
         check(!wfi::parse_cli_options(4, ovf_argv, 2, "process", opt, oerr),
-              "overflow-length limit refused (ERANGE, issue #70)");
+              "overflow-length limit refused (issue #70)");
         char i2[] = "--id";
         char* ovi_argv[] = {a0, a1, i2, v9};
         check(!wfi::parse_cli_options(4, ovi_argv, 2, "person", opt, oerr),
-              "overflow-length id refused (ERANGE, issue #70)");
+              "overflow-length id refused (issue #70)");
         char v5[] = "1";
         char* edge_argv[] = {a0, a1, f1, v5};
         check(wfi::parse_cli_options(4, edge_argv, 2, "process", opt, oerr) &&
