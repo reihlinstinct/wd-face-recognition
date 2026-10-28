@@ -101,6 +101,19 @@ int main() {
         std::remove(p.c_str());
         check(wfp::decode_jpeg("/tmp/definitely-not-here.jpg").pixels.empty(),
               "missing file decodes to empty");
+        // Pixel cap (independent review #45): over the limit -> empty +
+        // "too large"; under -> normal decode.
+        unsigned char big[40 * 40 * 3] = {};
+        check(wfp::encode_jpeg(big, 40, 40, p), "big jpeg encodes");
+        std::string reason;
+        wfp::RgbImage capped = wfp::decode_jpeg(p, &reason, 1000);
+        check(capped.pixels.empty() && reason == "too large", "oversized refused with reason");
+        wfp::RgbImage ok = wfp::decode_jpeg(p, &reason, 10000);
+        check(!ok.pixels.empty() && reason.empty(), "under-cap decodes");
+        std::remove(p.c_str());
+        // Encode failure must return false, never crash (crop-write path).
+        check(!wfp::encode_jpeg(grad, 64, 64, "/no/such/dir/x.jpg"),
+              "encode to a bad dir returns false");
     }
 
     if (fails == 0) std::printf("pipeline tests: all passed\n");

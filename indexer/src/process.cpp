@@ -38,7 +38,8 @@ namespace {
 // photo's crop write and mark them all failed, with no automatic retry.
 bool ensure_crop_dir(const std::string& data_dir, std::string& err) {
     for (const std::string& dir : {data_dir, data_dir + "/crops"}) {
-        if (mkdir(dir.c_str(), 0777) != 0 && errno != EEXIST) {
+        // Private face data (review #45): dirs are owner-only.
+        if (mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST) {
             err = "cannot create " + dir + ": " + std::strerror(errno);
             return false;
         }
@@ -53,6 +54,23 @@ bool ensure_crop_dir(const std::string& data_dir, std::string& err) {
         }
     }
     return true;
+}
+
+// mark_failed with the same SQLITE_BUSY retry policy as the commit path:
+// a concurrent scan's write lock must not abort the run (review #45).
+// Returns false on a real error or persistent contention (check err for
+// "locked"); conflict=true means the photo changed under us.
+bool mark_failed_with_retry(Db& db, const QueuedPhoto& q, const std::string& why,
+                            bool& conflict, std::string& err) {
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        conflict = false;
+        if (db.mark_failed(q.id, q.size, q.mtime, why, conflict, err)) return true;
+        if (conflict || err.find("locked") == std::string::npos) return false;
+        std::fprintf(stderr, "database busy (scan running?), retry %d/3\n",
+                     attempt + 1);
+        sleep(1u << attempt);
+    }
+    return false;
 }
 
 }  // namespace
@@ -76,14 +94,25 @@ bool process_queued(Db& db, const std::string& models_dir,
     std::vector<QueuedPhoto> queue;
     if (!db.queued_photos(limit, queue, err)) return false;
     for (const QueuedPhoto& q : queue) {
-        wfp::RgbImage img = wfp::decode_jpeg(q.path);
+        std::string reason;
+        wfp::RgbImage img = wfp::decode_jpeg(q.path, &reason);
         if (img.pixels.empty()) {
+            // "too large" for the pixel cap, "decode" for corrupt files.
+            const std::string why = reason.empty() ? "decode" : reason;
             bool conflict = false;
-            if (!db.mark_failed(q.id, q.size, q.mtime, "decode", conflict, err)) {
+            if (!mark_failed_with_retry(db, q, why, conflict, err)) {
                 if (conflict) {
                     // Changed under us: leave the newer queue entry alone.
                     ++counts.requeued;
                     continue;
+                }
+                if (err.find("locked") != std::string::npos) {
+                    std::fprintf(stderr,
+                        "database stayed busy; stopping, %s stays queued\n",
+                        q.path.c_str());
+                    long left = db.queued_count();
+                    counts.remaining = left < 0 ? limit : left;
+                    return true;  // soft stop, not a failure
                 }
                 err = "mark_failed: " + err;
                 return false;
@@ -132,10 +161,18 @@ bool process_queued(Db& db, const std::string& models_dir,
             for (const std::string& c : new_crops)
                 if (safe_crop_rel(c)) unlink((data_dir + "/" + c).c_str());
             bool conflict = false;
-            if (!db.mark_failed(q.id, q.size, q.mtime, "crop write", conflict, err)) {
+            if (!mark_failed_with_retry(db, q, "crop write", conflict, err)) {
                 if (conflict) {
                     ++counts.requeued;
                     continue;
+                }
+                if (err.find("locked") != std::string::npos) {
+                    std::fprintf(stderr,
+                        "database stayed busy; stopping, %s stays queued\n",
+                        q.path.c_str());
+                    long left = db.queued_count();
+                    counts.remaining = left < 0 ? limit : left;
+                    return true;  // soft stop, not a failure
                 }
                 err = "mark_failed: " + err;
                 return false;
@@ -143,9 +180,29 @@ bool process_queued(Db& db, const std::string& models_dir,
             ++counts.failed;
             continue;
         }
+        // Retry on SQLITE_BUSY (a concurrent scan holds the write lock),
+        // then soft-stop the run instead of aborting mid-queue: staged
+        // crops are removed, the photo stays queued, and the caller is
+        // told work remains (review #45).
         std::vector<std::string> old_crops;
         bool conflict = false;
-        if (!db.replace_faces(q.id, q.size, q.mtime, rows, old_crops, conflict, err)) {
+        bool committed = false;
+        for (int attempt = 0; attempt < 4 && !committed; ++attempt) {
+            conflict = false;
+            if (db.replace_faces(q.id, q.size, q.mtime, rows, old_crops,
+                                 conflict, err)) {
+                committed = true;
+            } else if (conflict) {
+                break;
+            } else if (err.find("locked") != std::string::npos) {
+                std::fprintf(stderr, "database busy (scan running?), retry %d/3\n",
+                             attempt + 1);
+                sleep(1u << attempt);
+            } else {
+                break;
+            }
+        }
+        if (!committed) {
             // Nothing committed: this run's staged crops are referenced by
             // nothing and always go away.
             for (const std::string& c : new_crops)
@@ -158,6 +215,14 @@ bool process_queued(Db& db, const std::string& models_dir,
                 std::fprintf(stderr, "%s changed during processing, left queued\n",
                              q.path.c_str());
                 continue;
+            }
+            if (err.find("locked") != std::string::npos) {
+                std::fprintf(stderr,
+                    "database stayed busy; stopping, %s stays queued\n",
+                    q.path.c_str());
+                long left = db.queued_count();
+                counts.remaining = left < 0 ? limit : left;
+                return true;  // soft stop, not a failure
             }
             err = "replace_faces: " + err;
             return false;

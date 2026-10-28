@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <sys/stat.h>
 
 #include "config.h"
 #include "db.h"
@@ -35,6 +36,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", err.c_str());
         return 2;
     }
+    // The index holds face data: never world-readable (review #45).
+    umask(0077);
     wfi::renice_self();
     wfi::Db db;
     if (!db.open(cfg.data_dir + "/index.db", err)) {

@@ -63,6 +63,11 @@ public:
     // How many photos are still queued (for progress reporting).
     // -1 on a query error.
     long queued_count();
+    // Face rows stored for one photo (-1 on error). Used by tests and the
+    // people page.
+    long face_count(long photo_id);
+    // Tests only: shorten the lock wait so the busy path is exercisable.
+    void set_busy_timeout(int ms);
     // Atomically replaces a photo's face rows with the new set and marks
     // the photo 'scanned' - but only if the photo is still queued with the
     // exact size/mtime version the caller processed. A concurrent scan that

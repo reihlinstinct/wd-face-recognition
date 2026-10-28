@@ -1,5 +1,7 @@
 #include "db.h"
 
+#include <sys/stat.h>
+
 namespace wfi {
 
 const char* kDetectorVersion = "scrfd-500m-int8";
@@ -75,7 +77,26 @@ bool Db::open(const std::string& path, std::string& err) {
         return false;
     }
     sqlite3_busy_timeout(db_, 5000);
-    return exec(kSchema, err);
+    if (!exec(kSchema, err)) return false;
+    // Face data is private (review #45): owner-only, even if an earlier
+    // version created the file under a loose umask. Best-effort: a
+    // filesystem without chmod (FAT USB share) must not block the index.
+    (void)chmod(path.c_str(), 0600);
+    return true;
+}
+
+void Db::set_busy_timeout(int ms) { sqlite3_busy_timeout(db_, ms); }
+
+long Db::face_count(long photo_id) {
+    (void)flush();
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db_, "SELECT count(*) FROM faces WHERE photo_id = ?",
+                           -1, &st, nullptr) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, photo_id);
+    long n = -1;
+    if (sqlite3_step(st) == SQLITE_ROW) n = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    return n;
 }
 
 long Db::begin_job(const std::string& root) {

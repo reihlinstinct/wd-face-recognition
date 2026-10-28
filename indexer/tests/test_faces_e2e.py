@@ -50,6 +50,11 @@ def main():
     assert "processed=4" in out and "failed=1" in out, out
     assert "remaining=0" in out, out
 
+    # Face data is private (independent review #45): index 0600, crops
+    # dir 0700, crop files 0600 - regardless of the caller's umask.
+    assert os.stat(os.path.join(data, "index.db")).st_mode & 0o777 == 0o600
+    assert os.stat(os.path.join(data, "crops")).st_mode & 0o777 == 0o700
+
     db = sqlite3.connect(os.path.join(data, "index.db"))
     states = dict(db.execute("SELECT path, state FROM photos").fetchall())
     byname = {os.path.basename(k): v for k, v in states.items()}
@@ -65,6 +70,7 @@ def main():
         assert len(bbox.split(",")) == 4, bbox
         assert not crop.startswith("/") and ".." not in crop, crop
         assert os.path.isfile(os.path.join(data, crop)), crop
+        assert os.stat(os.path.join(data, crop)).st_mode & 0o777 == 0o600, crop
 
     embs = {}
     for path, bbox, emb, crop in face_rows:

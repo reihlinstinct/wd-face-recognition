@@ -210,6 +210,39 @@ int main() {
               "mark_failed commits");
         check(db.queued_photos(100, q, err) && q.size() == 1, "failed photo leaves the queue");
         check(db.queued_count() == 1, "queued_count reports the real queue depth");
+        // The refused replaces above must have rolled back completely:
+        // the first round's face row survives (review #45).
+        check(db.face_count(aid) == 1, "refused replace keeps committed face rows");
+
+        // Busy/rollback (review #45): a second connection holding the write
+        // lock makes replace_faces fail with "locked" after the (shortened)
+        // busy timeout - and the committed rows stay untouched.
+        {
+            // Re-queue a.jpg BEFORE the lock is taken (begin_job/observe
+            // need the write lock themselves), and commit the batch.
+            long jobl = db.begin_job(root);
+            check(db.observe(jobl, root, root + "/a.jpg", asz, amt + 2, err) == 2,
+                  "re-queue before busy test");
+            check(db.flush(), "re-queue committed");
+            sqlite3* raw = nullptr;  // grab an exclusive write lock directly
+            check(sqlite3_open((data + "/index.db").c_str(), &raw) == SQLITE_OK,
+                  "raw lock connection opens");
+            sqlite3_busy_timeout(raw, 5000);
+            check(sqlite3_exec(raw, "BEGIN IMMEDIATE", nullptr, nullptr, nullptr) == SQLITE_OK,
+                  "write lock taken");
+            db.set_busy_timeout(150);  // keep the test fast
+            check(db.replace_faces(aid, asz, amt + 2, {r2}, oldc, conflict, err) == false
+                      && !conflict && err.find("locked") != std::string::npos,
+                  "busy writer makes replace_faces fail with locked");
+            check(db.face_count(aid) == 1, "busy failure keeps committed rows");
+            check(sqlite3_exec(raw, "ROLLBACK", nullptr, nullptr, nullptr) == SQLITE_OK,
+                  "write lock released");
+            sqlite3_close(raw);
+            db.set_busy_timeout(5000);
+            conflict = true;
+            check(db.replace_faces(aid, asz, amt + 2, {r2}, oldc, conflict, err) && !conflict,
+                  "replace succeeds after the lock clears");
+        }
     }
 
     if (fails > 0) {

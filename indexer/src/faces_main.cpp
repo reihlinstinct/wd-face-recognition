@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <sys/stat.h>
 
 #include "config.h"
 #include "db.h"
@@ -44,6 +45,13 @@ int main(int argc, char** argv) {
         return 2;
     }
     const int threads = threads_override > 0 ? threads_override : cfg.threads;
+    if (limit < 1) {  // 0/negative must not become an unbounded run
+        std::fprintf(stderr, "--limit must be >= 1\n");
+        return 2;
+    }
+    // Face crops, embeddings and the index are private: never world-readable
+    // on a shared NAS (independent review #45).
+    umask(0077);
     wfi::renice_self();
     wfi::Db db;
     if (!db.open(cfg.data_dir + "/index.db", err)) {
