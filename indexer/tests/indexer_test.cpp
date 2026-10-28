@@ -933,6 +933,7 @@ int main() {
                   tpl[1].cover_crop == "crops/t2_t1_f0.jpg",
               "equal-size groups ordered by smallest face id, not root order");
         check(tpl[0].id < tpl[1].id, "group order fixes insert order");
+    }
     // replace_clusters competing-overlap claim rule (issue #71): C
     // splits 3/2 across G1/G2 while D wholly joins G1 with 4. Global
     // max-overlap awards G1 to D (4 > 3); C's id/name continue on G2.
@@ -1059,6 +1060,72 @@ int main() {
         check(pl4.size() == 1 && pl4[0].id == e_id &&
                   pl4[0].name == "Low" && pl4[0].face_count == 4,
               "overlap tie goes to the lowest cluster id");
+    }
+
+    // replace_clusters cross-group tie (CodeRabbit #75): one live
+    // cluster overlapping TWO new groups equally is claimed by the
+    // EARLIER group (caller group order decides before cluster id).
+    {
+        std::string tmp5 = tmp + "/xtie";
+        std::string root5 = tmp5 + "/photos";
+        std::string data5 = tmp5 + "/data";
+        mkdir(tmp5.c_str(), 0777);
+        mkdir(root5.c_str(), 0777);
+        mkdir(data5.c_str(), 0777);
+        wfi::Db db5;
+        check(db5.open(data5 + "/index.db", err), "xtie db opens");
+        const char* names5[5] = {"k1", "k2", "k3", "k4", "x1"};
+        for (const char* n : names5)
+            write_file(root5 + "/" + n + ".jpg", n);
+        long jobk = db5.begin_job(root5);
+        for (const char* n : names5)
+            check(db5.observe(jobk, root5, root5 + "/" + n + ".jpg", 8, 1000, err) == 1,
+                  "xtie photo queued");
+        check(db5.flush(), "xtie batch committed");
+        std::vector<wfi::QueuedPhoto> kq;
+        check(db5.queued_photos(100, kq, err), "xtie queue readable");
+        for (const auto& qq : kq) {
+            wfi::FaceRow r;
+            r.bbox = "0,0,1,1";
+            r.embedding = {0.5f, 0.5f};
+            r.crop_path = "crops/" + qq.path.substr(root5.size() + 1);
+            std::vector<std::string> oldc;
+            bool conflict = true;
+            check(db5.replace_faces(qq.id, qq.size, qq.mtime, {r}, oldc,
+                                    conflict, err) && !conflict,
+                  "xtie face committed");
+        }
+        std::vector<wfi::ClusterFace> cf5;
+        check(db5.all_face_embeddings(cf5, err) && cf5.size() == 5,
+              "xtie faces read");
+        const long h[5] = {cf5[0].id, cf5[1].id, cf5[2].id, cf5[3].id,
+                           cf5[4].id};
+        check(db5.replace_clusters({{h[0], h[1], h[2], h[3]}, {h[4]}}, err),
+              "xtie initial clusters commit");
+        std::vector<wfi::PersonSummary> pl5;
+        check(db5.people_list(pl5, err) && pl5.size() == 2, "xtie: two clusters");
+        long k_id = 0;
+        for (const auto& ps : pl5)
+            if (ps.cover_crop == "crops/k1.jpg") k_id = ps.id;
+        check(k_id > 0 && db5.rename_cluster(k_id, "Even", err),
+              "xtie cluster named");
+
+        // C splits 2/2 across G1 (earlier) and G2: G1 keeps C's id/name.
+        check(db5.replace_clusters({{h[0], h[1], h[4]}, {h[2], h[3]}}, err),
+              "xtie recluster commits");
+        check(db5.people_list(pl5, err) && pl5.size() == 2,
+              "xtie: still two people");
+        bool earlier_kept = false, later_new = false;
+        for (const auto& ps : pl5) {
+            if (ps.cover_crop == "crops/k1.jpg")
+                earlier_kept = ps.id == k_id && ps.name == "Even" &&
+                               ps.face_count == 3;
+            if (ps.cover_crop == "crops/k3.jpg")
+                later_new = ps.id != k_id && ps.name.empty() &&
+                            ps.face_count == 2;
+        }
+        check(earlier_kept, "cross-group tie: earlier group keeps id and name");
+        check(later_new, "cross-group tie: later group gets a fresh cluster");
     }
 
     // JSON for the PHP pages (issue #50, PR 3c): escaping and shape.
