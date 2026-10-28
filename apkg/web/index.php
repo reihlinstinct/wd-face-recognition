@@ -82,13 +82,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // slashes; guards apply to the final resolved path.
             $msg = 'Folder not found on this NAS: ' . htmlspecialchars($photos, ENT_QUOTES, 'UTF-8')
                 . ' - paste the path as shown in the file manager, spaces are fine, no backslashes needed.';
-        } elseif (wdf_path_is_within(wdf_realpath_lenient($photosDir), wdf_realpath_lenient($demoOut))) {
-            // demo-out is wiped before every run: using it (or a subfolder)
-            // as the source would delete the input photos. Resolved paths:
-            // "/shares/x/./demo-out" slips past a raw prefix compare
-            // (CodeRabbit PR #34).
-            $msg = 'That folder is the demo output folder and is wiped before each run'
-                . ' - choose a different photo folder.';
+        } elseif (wdf_paths_overlap(wdf_realpath_lenient($photosDir), wdf_realpath_lenient($demoOut))) {
+            // Both directions (CodeRabbit PR #34): a source inside demo-out
+            // is deleted by the pre-run cleanup; a source CONTAINING
+            // demo-out (e.g. the reports share itself) makes the demo scan
+            // its own output mid-run and puts the cleanup inside the
+            // chosen tree. Resolved paths: "/shares/x/./demo-out" slips
+            // past a raw prefix compare.
+            $msg = 'That folder overlaps the demo output folder (facerecog-reports/demo-out),'
+                . ' which is wiped and rewritten on each run - choose a different photo folder.';
         } else {
             if (!is_dir($demoOut)) {
                 @mkdir($demoOut, 0777, true);

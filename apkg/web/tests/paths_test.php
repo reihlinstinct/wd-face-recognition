@@ -97,6 +97,17 @@ check(!wdf_path_is_within(wdf_realpath_lenient($rpTmp . '/./other'),
                           wdf_realpath_lenient($rpTmp . '/demo-out')),
       'an unrelated ./ path still passes the resolved guard');
 
+// wdf_paths_overlap: the demo source guard rejects BOTH directions
+// (CodeRabbit PR #34): source inside demo-out, and source containing it.
+$ov = '/shares/facerecog-reports/demo-out';
+check(wdf_paths_overlap($ov, $ov), 'identical paths overlap');
+check(wdf_paths_overlap($ov . '/crops', $ov), 'source inside demo-out overlaps');
+check(wdf_paths_overlap('/shares/facerecog-reports', $ov), 'source containing demo-out overlaps');
+check(wdf_paths_overlap('/shares', $ov), 'the /shares root containing demo-out overlaps');
+check(!wdf_paths_overlap('/shares/Public/photos', $ov), 'unrelated folders do not overlap');
+check(!wdf_paths_overlap('/shares/facerecog-reports/demo-outside', $ov),
+      'shared-prefix sibling does not overlap');
+
 if ($fails > 0) {
     fwrite(STDERR, "{$fails} test(s) failed\n");
     exit(1);

@@ -167,3 +167,13 @@ function wdf_realpath_lenient(string $path): string
     }
     return wdf_realpath_lenient($parent) . '/' . basename($path);
 }
+
+// True when two paths overlap in either direction: one is the other or a
+// descendant of it. Used by the demo source guard: the source must not
+// contain demo-out (the scan would ingest its own output, and the pre-run
+// cleanup deletes files inside the chosen tree) any more than it may be
+// inside it (CodeRabbit PR #34).
+function wdf_paths_overlap(string $a, string $b): bool
+{
+    return wdf_path_is_within($a, $b) || wdf_path_is_within($b, $a);
+}
