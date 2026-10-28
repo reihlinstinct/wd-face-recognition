@@ -37,6 +37,17 @@ require g++
 require cargo
 require curl
 
+# Pre-flight: mksapkg signs apkg.sign with openssl bf-cbc (Blowfish). On OpenSSL
+# 3 without the legacy provider the cipher is missing and mksapkg SILENTLY
+# writes an empty signature, which the NAS then rejects ("signature failed").
+# Fail loudly instead. (Found during on-device install debugging, issue #22.)
+probe_size="$(printf 'probe' | openssl bf-cbc -md sha256 -k probe 2>/dev/null | wc -c)"
+if [ "${probe_size}" -lt 24 ]; then
+	echo "openssl cannot do bf-cbc (Blowfish): mksapkg would produce an EMPTY apkg.sign." >&2
+	echo "On OpenSSL 3.x, enable the legacy provider (e.g. openssl.cnf with legacy + default providers)." >&2
+	exit 1
+fi
+
 log "1/4 worker (C++, static)"
 cmake -S "${REPO_ROOT}/worker" -B "${WORKER_BUILD}" -DCMAKE_BUILD_TYPE=Release
 cmake --build "${WORKER_BUILD}" --parallel
@@ -90,17 +101,28 @@ chmod +x "${MKSAPKG}"
 
 VERSION="$(awk -F: '/^Version:/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' "${REPO_ROOT}/apkg/apkg.rc")"
 
+# The payload tarball's root directory becomes the current directory's name.
+# The device probes <Nas_Prog>/_install/<module>/apkg.sign, so the root dir MUST
+# be the module name - a mismatch means apkg.sign is never found and the install
+# fails with "signature failed" (issue #22). Stage into a module-named dir.
+STAGE_PARENT="${REPO_ROOT}/build/apkg-stage"
+STAGE_DIR="${STAGE_PARENT}/wd-face-recognition"
+rm -rf "${STAGE_PARENT}"
+mkdir -p "${STAGE_DIR}"
+cp -a "${REPO_ROOT}/apkg/." "${STAGE_DIR}/"
+rm -f "${STAGE_DIR}/apkg.sign" "${STAGE_DIR}/apkg.xml"
+
 # mksapkg writes the package to the PARENT of the app directory and appends a
 # build-date suffix, e.g. MyCloudPR4100_<app>_<version>.bin(10272026).
 # Remove stale packages first so only the one from THIS build can match.
-rm -f "${REPO_ROOT}/${MODEL}_wd-face-recognition_"*.bin*
+rm -f "${STAGE_PARENT}/${MODEL}_wd-face-recognition_"*.bin*
 
-cd "${REPO_ROOT}/apkg"
+cd "${STAGE_DIR}"
 "${MKSAPKG}" -E -s -m "${MODEL}" > /dev/null
 rm -f "${MKSAPKG}"
 rm -f apkg.sign apkg.xml
 
-BIN_PATH="$(find "${REPO_ROOT}" -maxdepth 1 -name "${MODEL}_wd-face-recognition_${VERSION}.bin*" | head -n 1)"
+BIN_PATH="$(find "${STAGE_PARENT}" -maxdepth 1 -name "${MODEL}_wd-face-recognition_${VERSION}.bin*" | head -n 1)"
 if [ -z "${BIN_PATH}" ]; then
 	echo "no .bin package produced for version ${VERSION}" >&2
 	exit 1
