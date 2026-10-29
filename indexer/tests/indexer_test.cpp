@@ -1340,7 +1340,10 @@ int main() {
             sleep(30);
             _exit(0);
         }
-        check(legacy > 0, "legacy holder forked");
+        if (legacy < 0) {
+            check(false, "legacy holder forked");
+            return 1;  // never kill(-1) / waitpid(-1) below
+        }
         // Wait for the child's prctl so the comm check sees wdf_*.
         bool named = false;
         for (int i = 0; i < 100 && !named; ++i) {
@@ -1381,7 +1384,10 @@ int main() {
         // and ignored.
         const pid_t foreign = fork();
         if (foreign == 0) { sleep(30); _exit(0); }  // comm: "wfi_test"
-        check(foreign > 0, "foreign process forked");
+        if (foreign < 0) {
+            check(false, "foreign process forked");
+            return 1;
+        }
         const std::string foreignp = tmp + "/foreign.lock";
         {
             const int wf = open(foreignp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);

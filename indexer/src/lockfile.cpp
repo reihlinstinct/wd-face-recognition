@@ -55,6 +55,15 @@ bool InstanceLock::acquire(const std::string& path, std::string& err) {
     // process starting between this read and the flock is not seen.
     char buf[32] = {0};
     const ssize_t got = pread(fd, buf, sizeof(buf) - 1, 0);
+    if (got < 0) {
+        // A failed read must not look like an empty file (CodeRabbit
+        // #106): a live legacy holder would slip past the guard.
+        const int e = errno;
+        flock(fd, LOCK_UN);
+        close(fd);
+        err = "cannot read the lockfile " + path + ": " + std::strerror(e);
+        return false;
+    }
     if (got > 0) {
         char* end = nullptr;
         const long pid = std::strtol(buf, &end, 10);
