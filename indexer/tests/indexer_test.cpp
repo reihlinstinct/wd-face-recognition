@@ -62,6 +62,14 @@ int main() {
     check(cfg.roots.size() == 1 && cfg.roots[0] == root, "config root parsed");
     wfi::Config bad;
     check(!wfi::load_config(tmp + "/missing.conf", bad, err), "missing config refused");
+    // Zero roots loads (issue #108): empty value and absent line alike.
+    write_file(tmp + "/empty.conf", "roots=\ndata_dir=" + data + "\n");
+    wfi::Config ecfg;
+    check(wfi::load_config(tmp + "/empty.conf", ecfg, err), "empty roots= loads");
+    check(ecfg.roots.empty(), "empty roots= yields no roots");
+    write_file(tmp + "/noroots.conf", "data_dir=" + data + "\n");
+    check(wfi::load_config(tmp + "/noroots.conf", ecfg, err), "absent roots= loads");
+    check(ecfg.roots.empty(), "absent roots= yields no roots");
 
     // First scan: two JPEGs queued (txt ignored).
     long job1 = db.begin_job(root);

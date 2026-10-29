@@ -254,6 +254,34 @@ else:
     check(r.returncode == 0 and "failed=0" in r.stdout,
           "unremovable crop unlinked under privilege override")
 
+# Empty roots (issue #108): only the walk no-ops - every wdf_faces DB
+# command keeps operating on the existing index.
+econf = os.path.join(tmp, "empty.conf")
+with open(econf, "w") as f:
+    f.write(f"roots=\ndata_dir={data}\n")
+r = run("people", "--config", econf)
+people = json.loads(r.stdout) if r.returncode == 0 else []
+check(r.returncode == 0 and any(p["id"] == keep_id for p in people),
+      "people reads the index with empty roots")
+r = run("person", "--config", econf, "--id", str(keep_id))
+person = json.loads(r.stdout) if r.returncode == 0 else {}
+check(r.returncode == 0 and person.get("faces"), "person reads with empty roots")
+r = run("rename", "--config", econf, "--id", str(keep_id), "--name", "EmptyOK")
+check(r.returncode == 0, "rename writes with empty roots")
+r = run("people", "--config", econf)
+people = json.loads(r.stdout) if r.returncode == 0 else []
+kept = [p for p in people if p["id"] == keep_id]
+check(kept and kept[0]["name"] == "EmptyOK", "empty-roots rename persisted")
+r = run("cluster", "--config", econf)
+check(r.returncode == 0 and r.stdout.startswith("faces="),
+      "cluster runs with empty roots")
+r = run("gc", "--config", econf)
+check(r.returncode == 0 and r.stdout.startswith("removed="),
+      "gc runs with empty roots")
+r = run("process", "--config", econf, "--models", "/m")
+check(r.returncode == 1 and "process failed: process_queued stub" in r.stderr,
+      "process still dispatches with empty roots")
+
 if fails:
     print(f"test_faces_cli: {fails} FAILURES", file=sys.stderr)
     sys.exit(1)
