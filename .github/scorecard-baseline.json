@@ -1,0 +1,85 @@
+{
+ "version": 1,
+ "findings": [
+  {
+   "path": ".github/workflows/scorecard.yml",
+   "rule": "job-write",
+   "scope": "analysis",
+   "evidence": "security-events: write",
+   "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
+   "reason": "Approved job-scoped SARIF upload to GitHub code scanning; no code or secrets write."
+  },
+  {
+   "path": ".github/workflows/bench-ncnn.yml",
+   "rule": "unhashed-pip-install",
+   "scope": "dependencies",
+   "evidence": "python3 -m pip install --no-cache-dir pillow onnx-simplifier==0.4.36",
+   "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
+   "reason": "Pre-existing pip install without --require-hashes; resolves unhashed dependencies; tracked for hash pinning in this issue."
+  },
+  {
+   "path": ".github/workflows/bench.yml",
+   "rule": "unhashed-pip-install",
+   "scope": "dependencies",
+   "evidence": "python3 -m pip install --no-cache-dir pillow",
+   "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
+   "reason": "Pre-existing pip install without --require-hashes; resolves unhashed dependencies; tracked for hash pinning in this issue."
+  },
+  {
+   "path": ".github/workflows/ci.yml",
+   "rule": "unhashed-pip-install",
+   "scope": "dependencies",
+   "evidence": "pip install -r requirements-dev.txt",
+   "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
+   "reason": "Pre-existing pip install without --require-hashes; resolves unhashed dependencies; tracked for hash pinning in this issue."
+  },
+  {
+   "path": ".github/workflows/demo.yml",
+   "rule": "unhashed-pip-install",
+   "scope": "dependencies",
+   "evidence": "python3 -m pip install --no-cache-dir pillow onnx-simplifier==0.4.36 pnnx==20261020",
+   "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
+   "reason": "Pre-existing pip install without --require-hashes; resolves unhashed dependencies; tracked for hash pinning in this issue."
+  },
+  {
+   "path": ".github/workflows/package.yml",
+   "rule": "unhashed-pip-install",
+   "scope": "dependencies",
+   "evidence": "python3 -m pip install --no-cache-dir onnx-simplifier==0.4.36",
+   "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
+   "reason": "Pre-existing pip install without --require-hashes; resolves unhashed dependencies; tracked for hash pinning in this issue."
+  },
+  {
+   "path": "requirements-dev.txt",
+   "rule": "unhashed-requirement",
+   "scope": "dependencies",
+   "evidence": "pytest==9.1.1",
+   "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
+   "reason": "Pre-existing requirement entry without exact version and sha256 hash; tracked for hash pinning in this issue."
+  },
+  {
+   "path": "requirements-dev.txt",
+   "rule": "unhashed-requirement",
+   "scope": "dependencies",
+   "evidence": "pytest-cov==7.1.0",
+   "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
+   "reason": "Pre-existing requirement entry without exact version and sha256 hash; tracked for hash pinning in this issue."
+  },
+  {
+   "path": "requirements-dev.txt",
+   "rule": "unhashed-requirement",
+   "scope": "dependencies",
+   "evidence": "ruff==0.17.3",
+   "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
+   "reason": "Pre-existing requirement entry without exact version and sha256 hash; tracked for hash pinning in this issue."
+  },
+  {
+   "path": "requirements-dev.txt",
+   "rule": "unhashed-requirement",
+   "scope": "dependencies",
+   "evidence": "bandit==1.9.4",
+   "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
+   "reason": "Pre-existing requirement entry without exact version and sha256 hash; tracked for hash pinning in this issue."
+  }
+ ]
+}
