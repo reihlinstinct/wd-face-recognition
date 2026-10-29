@@ -1,6 +1,6 @@
-// Single-instance guard (issue #46): an O_EXCL lockfile in data_dir so a
-// second wdf_indexer/wdf_faces instance exits politely instead of
-// interleaving crop writes and face replacements with the first.
+// Single-instance guard (issue #46, reworked in #98): an flock(2) on
+// data_dir/wdf.lock so a second wdf_indexer/wdf_faces instance exits
+// politely instead of interleaving crop writes and face replacements.
 #pragma once
 #include <string>
 
@@ -11,16 +11,17 @@ public:
     InstanceLock() = default;
     InstanceLock(const InstanceLock&) = delete;
     InstanceLock& operator=(const InstanceLock&) = delete;
-    // Unlinks the lockfile if this instance created it.
+    // Closing the descriptor releases the lock; process death does too.
     ~InstanceLock();
 
-    // Creates path with O_EXCL and writes our PID. An existing file is
-    // stale when its PID is dead (kill(pid, 0) == ESRCH) and is then
-    // reclaimed; otherwise err names the live holder and false comes back.
+    // Opens path (creating it) and takes an exclusive non-blocking
+    // flock. A live holder makes this false with a polite err; I/O
+    // failures name the path. The lockfile is never unlinked: a fresh
+    // inode would not share the kernel lock.
     bool acquire(const std::string& path, std::string& err);
 
 private:
-    std::string held_;  // empty when nothing is held
+    int fd_ = -1;
 };
 
 }  // namespace wfi

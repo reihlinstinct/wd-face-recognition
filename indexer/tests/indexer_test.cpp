@@ -1200,9 +1200,82 @@ int main() {
         sqlite3_close(raw5);
     }
 
-    // Instance lock (issue #46): a second holder is refused politely, the
-    // lockfile leaves with its holder, and a stale lockfile (dead PID) is
-    // reclaimed with the new holder's PID written in.
+    // all_crop_paths fault injection (review #99): an interrupted scan
+    // must fail and clear the set - a partial reference set handed to gc
+    // would delete still-referenced crops.
+    {
+        std::string tmp6 = tmp + "/gcfi";
+        std::string data6 = tmp6 + "/data";
+        mkdir(tmp6.c_str(), 0777);
+        mkdir(data6.c_str(), 0777);
+        wfi::Db db6;
+        check(db6.open(data6 + "/index.db", err), "gc-fi db opens");
+        long jobg = db6.begin_job(tmp6);
+        check(db6.observe(jobg, tmp6, tmp6 + "/g.jpg", 2, 1000, err) == 1,
+              "gc-fi photo queued");
+        std::vector<wfi::QueuedPhoto> gq;
+        check(db6.queued_photos(10, gq, err) && gq.size() == 1,
+              "gc-fi queue readable");
+        wfi::FaceRow frg;
+        frg.bbox = "0,0,1,1";
+        frg.embedding = {1.0f, 0.0f};
+        frg.crop_path = "crops/g_t1_f0.jpg";
+        std::vector<std::string> oldg;
+        bool conflictf = true;
+        check(db6.replace_faces(gq[0].id, gq[0].size, gq[0].mtime, {frg},
+                                oldg, conflictf, err) && !conflictf,
+              "gc-fi face committed");
+        std::set<std::string> paths;
+        check(db6.all_crop_paths(paths, err) && paths.size() == 1,
+              "crop paths readable without faults");
+        // Interrupt mid-scan (review #101): a first clean pass counts
+        // the VDBE instructions of a full scan, the second interrupts at
+        // the halfway point - with three faces at least one row has been
+        // collected by then, so the empty set proves partial-scan
+        // cleanup and not just an upfront clear.
+        wfi::FaceRow frg2 = frg, frg3 = frg;
+        frg2.crop_path = "crops/g_t1_f1.jpg";
+        frg3.crop_path = "crops/g_t1_f2.jpg";
+        // A rescan re-queues the photo at a newer mtime; the three rows
+        // then replace the single one (the version guard refuses a
+        // replace on a photo that is not queued at that exact version).
+        long jobg2 = db6.begin_job(tmp6);
+        check(db6.observe(jobg2, tmp6, tmp6 + "/g.jpg", 2, 1001, err) == 2,
+              "gc-fi photo re-queued");
+        check(db6.replace_faces(gq[0].id, 2, 1001,
+                                {frg, frg2, frg3}, oldg, conflictf, err) &&
+                  conflictf == false,
+              "gc-fi three faces committed");
+        int instructions = 0;
+        sqlite3_progress_handler(
+            db6.handle_for_test(), 1,
+            [](void* p) -> int { ++*(int*)p; return 0; }, &instructions);
+        check(db6.all_crop_paths(paths, err) && paths.size() == 3,
+              "calibration scan collects all three");
+        check(instructions > 0, "progress handler fired during calibration");
+        const int cut = instructions / 2;
+        check(cut > 0 && cut < instructions,
+              "cutoff sits strictly inside the scan");
+        {
+            int state[2] = {0, cut};  // calls so far, cutoff
+            sqlite3_progress_handler(
+                db6.handle_for_test(), 1,
+                [](void* p) -> int {
+                    int* st = (int*)p;
+                    return ++st[0] >= st[1] ? 1 : 0;
+                },
+                state);
+            paths.clear();
+            paths.insert("stale");
+            check(!db6.all_crop_paths(paths, err) && paths.empty(),
+                  "interrupted crop-path scan fails with an empty set");
+        }
+        sqlite3_progress_handler(db6.handle_for_test(), 0, nullptr, nullptr);
+    }
+
+    // Instance lock (issues #46, #98): flock semantics - a second holder
+    // is refused politely, the lock frees when the holder's descriptor
+    // closes (destructor or process death; no stale state to reclaim).
     {
         const std::string lockp = tmp + "/wdf.lock";
         {
@@ -1212,78 +1285,53 @@ int main() {
             check(!l2.acquire(lockp, err) &&
                       err.find("already running") != std::string::npos,
                   "second instance refused politely");
+            check(!l1.acquire(lockp, err) &&
+                      err.find("already holds") != std::string::npos,
+                  "the same object cannot take a second lock");
         }
-        check(access(lockp.c_str(), F_OK) != 0,
-              "lockfile released with the holder");
-        // fork+wait gives a PID that is certainly dead afterwards.
-        const pid_t dead = fork();
-        if (dead == 0) _exit(0);
-        check(dead > 0 && waitpid(dead, nullptr, 0) == dead,
-              "dead pid available for the stale-lock test");
-        const std::string stale = std::to_string((long)dead) + "\n";
-        const int lfd = open(lockp.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
-        check(lfd >= 0 && write(lfd, stale.c_str(), stale.size()) ==
-                                 (ssize_t)stale.size(),
-              "stale lockfile planted");
-        if (lfd >= 0) close(lfd);
-        wfi::InstanceLock l3;
-        check(l3.acquire(lockp, err), "stale lockfile reclaimed");
-        char buf[32] = {0};
-        const int rfd = open(lockp.c_str(), O_RDONLY);
-        check(rfd >= 0 && read(rfd, buf, sizeof(buf) - 1) > 0 &&
-                  std::strtol(buf, nullptr, 10) == (long)getpid(),
-              "reclaimed lock holds the new owner's pid");
-        if (rfd >= 0) close(rfd);
-        // CodeRabbit #97: the holder PID lands complete (temp+link), and
-        // the temp file never survives.
-        const std::string want = std::to_string((long)getpid()) + "\n";
-        check(buf == want, "lockfile content is exactly the holder pid");
-        check(access((lockp + ".tmp." + std::to_string((long)getpid())).c_str(),
-                     F_OK) != 0,
-              "no temp lockfile left behind");
-        // A numeric prefix with trailing junk is NOT a live holder: with
-        // only a strtol prefix parse this file would name our own live
-        // pid and block every later instance.
         {
-            const std::string junk = want.substr(0, want.size() - 1) + "junk\n";
-            const int jfd = open(lockp.c_str(), O_WRONLY | O_TRUNC);
-            check(jfd >= 0 && write(jfd, junk.c_str(), junk.size()) ==
-                                     (ssize_t)junk.size(),
-                  "junk-suffix lockfile planted");
-            if (jfd >= 0) close(jfd);
+            wfi::InstanceLock l3;
+            check(l3.acquire(lockp, err), "lock free after the holder leaves");
+        }
+        // Deterministic multi-process contention (issue #98): a child
+        // holds the lock across a pipe handshake; the parent is refused
+        // while the child lives and acquires once it dies.
+        int to_child[2], to_parent[2];
+        check(pipe(to_child) == 0 && pipe(to_parent) == 0,
+              "contention pipes created");
+        const pid_t kid = fork();
+        if (kid == 0) {
+            close(to_child[1]);
+            close(to_parent[0]);
+            wfi::InstanceLock kl;
+            std::string kerr;
+            if (!kl.acquire(lockp, kerr)) _exit(1);
+            char go = '1';
+            if (write(to_parent[1], &go, 1) != 1) _exit(1);
+            _exit(read(to_child[0], &go, 1) == 1 ? 0 : 1);
+        }
+        close(to_child[0]);
+        close(to_parent[1]);
+        // Parent only (review #101): in the child fork() returns 0, and a
+        // check there would print a spurious FAIL on green runs.
+        check(kid > 0, "contention child forked");
+        char go = 0;
+        check(read(to_parent[0], &go, 1) == 1 && go == '1',
+              "child holds the lock");
+        {
             wfi::InstanceLock l4;
-            check(l4.acquire(lockp, err),
-                  "junk suffix is not a live pid (reclaimed)");
+            check(!l4.acquire(lockp, err) &&
+                      err.find("already running") != std::string::npos,
+                  "parent refused while the child holds");
         }
-        // Reviewer #97: a crash between temp create and link leaves
-        // "wdf.lock.tmp.<pid>"; a dead pid's temp is swept at acquire,
-        // a live one stays.
-        {
-            const std::string dead_tmp =
-                lockp + ".tmp." + std::to_string((long)dead);
-            // getppid(): our own pid's temp is the acquirer's own
-            // scratch name and would be cleaned by the link itself.
-            const std::string live_tmp =
-                lockp + ".tmp." + std::to_string((long)getppid());
-            write_file(dead_tmp, "x");
-            write_file(live_tmp, "x");
-            wfi::InstanceLock l7;
-            check(l7.acquire(lockp, err), "acquire sweeps stale temps");
-            check(access(dead_tmp.c_str(), F_OK) != 0,
-                  "dead-pid temp swept");
-            check(access(live_tmp.c_str(), F_OK) == 0,
-                  "live-pid temp kept");
-            unlink(live_tmp.c_str());
-        }
-        // An empty lockfile (a legacy or crashed writer) is stale too.
-        {
-            wfi::InstanceLock l5;
-            check(l5.acquire(lockp, err), "lock re-acquired after release");
-            const int efd = open(lockp.c_str(), O_WRONLY | O_TRUNC);
-            if (efd >= 0) close(efd);  // l5 still "holds" it; dropped below
-            wfi::InstanceLock l6;
-            check(l6.acquire(lockp, err), "empty lockfile reclaimed");
-        }
+        check(write(to_child[1], &go, 1) == 1, "child released");
+        int st = 0;
+        check(waitpid(kid, &st, 0) == kid && st == 0,
+              "child exited cleanly");
+        close(to_child[1]);
+        close(to_parent[0]);
+        wfi::InstanceLock l5;
+        check(l5.acquire(lockp, err), "lock free after the holder died");
     }
 
     // JSON for the PHP pages (issue #50, PR 3c): escaping and shape.
