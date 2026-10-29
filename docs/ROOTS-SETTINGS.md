@@ -4,7 +4,7 @@ The owner sets which shares/folders the indexer scans by editing
 `roots=` in `wfi.conf`. Today that means SMB file access; this page
 moves it into the dashboard, next to the output-folder setting.
 
-## Decisions (owner-approved 2026-10-29)
+## Decisions (owner-approved: "בנה" - build it - phonemsg-01M62KC6RKS20DWV0ZWFNKZYMW, 03:11 Thu 29 Oct 2026)
 
 - **A settings page, not the dashboard file manager.** The file
   manager edits bytes; the page can validate, normalize, and persist
@@ -35,7 +35,9 @@ per-session CSRF token, PRG so a refresh never repeats the write.
 5. A share ROOT is allowed. The subfolder-only rule for the output
    folder exists because runs replace its contents; scanning a share
    root is the normal case and wipes nothing.
-6. Dedupe; at most 16 roots; at most 512 bytes per path.
+6. No commas in a path: `roots=` is comma-separated, so a comma
+   would silently split one root into two.
+7. Dedupe; at most 16 roots; at most 512 bytes per path.
 7. The empty list is valid - it is the shipped default (the indexer
    scans nothing).
 
@@ -44,8 +46,18 @@ per-session CSRF token, PRG so a refresh never repeats the write.
 Rewrite only the `roots=` line; every other line of `wfi.conf` is
 preserved verbatim, and a missing line is appended. The write is
 atomic: `wfi.conf.tmp.<pid>` in the same directory, `fflush` +
-`fsync`, then `rename()` over `wfi.conf` - the pattern `init.sh`
-already uses and `apkg/tests/init_conf_test.sh` pins.
+`fsync`, then `rename()` over `wfi.conf`. `init.sh` already uses the
+temp + `mv` half of this pattern (pinned by
+`apkg/tests/init_conf_test.sh`); the page adds the `fsync` before the
+rename.
+
+## Apply-time semantics
+
+The indexer and `wdf_faces` read `wfi.conf` once at startup: a saved
+edit applies to the NEXT scan or run, not one already in flight. That
+is safe without coordinating with the instance lock (#46/#98): the
+atomic rename swaps the whole file, so a process starting mid-save
+sees either the old config or the new one, never a mix.
 
 ## Rejected alternatives
 
