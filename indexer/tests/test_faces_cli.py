@@ -282,6 +282,29 @@ r = run("process", "--config", econf, "--models", "/m")
 check(r.returncode == 1 and "process failed: process_queued stub" in r.stderr,
       "process still dispatches with empty roots")
 
+# merge under empty roots (CodeRabbit #109): the other write with real
+# semantics - the source cluster must be gone, the target keeps the faces.
+db = sqlite3.connect(dbp)
+cur = db.cursor()
+cur.execute("INSERT INTO clusters(name) VALUES('Second')")
+second_id = cur.lastrowid
+cur.execute(
+    "INSERT INTO faces(photo_id, bbox, embedding, crop_path, cluster_id)"
+    " VALUES(?, '1,1,2,2', x'00000000', 'crops/seed2.jpg', ?)",
+    (photo_id, second_id))
+db.commit()
+db.close()
+r = run("merge", "--config", econf, "--from", str(second_id),
+        "--to", str(keep_id))
+check(r.returncode == 0, "merge succeeds with empty roots")
+r = run("people", "--config", econf)
+people = json.loads(r.stdout) if r.returncode == 0 else []
+check(all(p["id"] != second_id for p in people),
+      "merged-away source gone with empty roots")
+kept = [p for p in people if p["id"] == keep_id]
+check(kept and kept[0]["faces"] == 2,
+      "empty-roots merge moved the face to the target")
+
 if fails:
     print(f"test_faces_cli: {fails} FAILURES", file=sys.stderr)
     sys.exit(1)
