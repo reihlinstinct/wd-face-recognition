@@ -1,0 +1,88 @@
+{
+  "mappings": [
+    {
+      "pattern": "src/**",
+      "checks": [
+        "lint",
+        "test",
+        "security"
+      ]
+    },
+    {
+      "pattern": "tests/**",
+      "checks": [
+        "lint",
+        "test"
+      ]
+    },
+    {
+      "pattern": "requirements*.txt",
+      "checks": [
+        "lint",
+        "test",
+        "security"
+      ]
+    },
+    {
+      "pattern": "demo/**",
+      "checks": [
+        "demo-scan-test",
+        "wdf-demo"
+      ]
+    },
+    {
+      "pattern": "pipeline/**",
+      "checks": [
+        "demo-scan-test",
+        "indexer-test",
+        "wdf-demo"
+      ]
+    },
+    {
+      "pattern": "indexer/**",
+      "checks": [
+        "indexer-test",
+        "wdf-demo"
+      ]
+    },
+    {
+      "pattern": "bench/cpp/**",
+      "checks": [
+        "shootout"
+      ]
+    },
+    {
+      "pattern": "bench/ncnn/**",
+      "checks": [
+        "ncnn-spike",
+        "wdf-demo"
+      ]
+    },
+    {
+      "pattern": "bench/assets/**",
+      "checks": [
+        "wdf-demo"
+      ]
+    },
+    {
+      "pattern": "apkg/**",
+      "checks": [
+        "apkg",
+        "demo-scan-test",
+        "lint"
+      ]
+    },
+    {
+      "pattern": "scripts/**",
+      "checks": [
+        "lint"
+      ]
+    },
+    {
+      "pattern": ".gitleaks.toml",
+      "checks": [
+        "secret-scan"
+      ]
+    }
+  ]
+}
