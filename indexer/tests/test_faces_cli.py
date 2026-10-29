@@ -195,6 +195,21 @@ r = run("gc", "--config", conf)
 check(r.returncode == 0 and r.stdout.strip() == "removed=0 kept=0 failed=0",
       "absent crops dir reports the full counts shape")
 os.mkdir(crops)
+# A symlink at crops/ is refused: the sweep must never follow it into
+# another writable directory (CodeRabbit #99).
+elsewhere = os.path.join(tmp, "elsewhere")
+os.mkdir(elsewhere)
+with open(os.path.join(elsewhere, "keepme.jpg"), "w") as f:
+    f.write("x")
+shutil.rmtree(crops)
+os.symlink(elsewhere, crops)
+r = run("gc", "--config", conf)
+check(r.returncode == 1 and "not a real directory" in r.stderr,
+      "symlinked crops dir refused")
+check(os.path.exists(os.path.join(elsewhere, "keepme.jpg")),
+      "symlink target contents untouched")
+os.unlink(crops)
+os.mkdir(crops)
 
 # Instance lock (issue #46): with a live PID in data_dir/wdf.lock, a
 # mutating command exits politely while the read commands stay usable.

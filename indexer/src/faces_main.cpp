@@ -180,13 +180,23 @@ int main(int argc, char** argv) {
             return 1;
         }
         const std::string dir = cfg.data_dir + "/crops";
-        DIR* d = opendir(dir.c_str());
-        if (d == nullptr && errno == ENOENT) {
+        // lstat first (CodeRabbit #99): a symlink at crops/ would make the
+        // sweep unlink files in whatever directory it points at. Only a
+        // real directory is swept.
+        struct stat dst;
+        if (lstat(dir.c_str(), &dst) != 0 && errno == ENOENT) {
             // No crops yet: nothing to do. Same counts shape as a real
             // sweep (CodeRabbit #99).
             std::printf("removed=0 kept=0 failed=0\n");
             return 0;
         }
+        if (lstat(dir.c_str(), &dst) != 0 || !S_ISDIR(dst.st_mode) ||
+            S_ISLNK(dst.st_mode)) {
+            std::fprintf(stderr, "gc: %s is not a real directory\n",
+                         dir.c_str());
+            return 1;
+        }
+        DIR* d = opendir(dir.c_str());
         if (d == nullptr) {
             std::fprintf(stderr, "cannot list %s: %s\n", dir.c_str(),
                          std::strerror(errno));
