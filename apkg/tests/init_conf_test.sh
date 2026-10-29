@@ -9,10 +9,14 @@ set -u
 fails=0
 bad() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
-WORK="$(mktemp -d)" || { echo 'mktemp failed' >&2; exit 1; }
-# An empty WORK would put fixtures under /case1 and neuter the trap
-# (review #91).
+# Fixed template: TMPDIR cannot steer the scratch dir (review #91 -
+# the path is inserted into generated shell assignments, so it must
+# never contain $, backticks or quotes).
+WORK="$(mktemp -d /tmp/wdf-init-conf.XXXXXX)" || { echo 'mktemp failed' >&2; exit 1; }
 [ -n "$WORK" ] && [ -d "$WORK" ] || { echo 'bad scratch dir' >&2; exit 1; }
+case "$WORK" in
+	*[!A-Za-z0-9_/.-]*) echo "unsafe scratch path: $WORK" >&2; exit 1 ;;
+esac
 trap 'rm -rf "$WORK"' EXIT
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
