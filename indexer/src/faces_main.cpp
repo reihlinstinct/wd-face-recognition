@@ -4,6 +4,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
+#include <dirent.h>
+#include <set>
 #include <string>
 #include <sys/stat.h>
 
@@ -24,14 +27,16 @@ int main(int argc, char** argv) {
     const std::string cmd = argc >= 2 ? argv[1] : "";
     const bool is_read = cmd == "people" || cmd == "person";
     const bool is_write = cmd == "rename" || cmd == "merge";
-    if (argc < 3 || (cmd != "process" && cmd != "cluster" && !is_read && !is_write)) {
+    if (argc < 3 || (cmd != "process" && cmd != "cluster" && cmd != "gc" &&
+                     !is_read && !is_write)) {
         std::fprintf(stderr,
             "usage: wdf_faces process --config FILE [--models DIR] [--limit N] [--threads N]\n"
             "       wdf_faces cluster --config FILE [--threshold 0.5]\n"
             "       wdf_faces people --config FILE\n"
             "       wdf_faces person --config FILE --id N\n"
             "       wdf_faces rename --config FILE --id N --name NAME\n"
-            "       wdf_faces merge --config FILE --from N --to N\n");
+            "       wdf_faces merge --config FILE --from N --to N\n"
+            "       wdf_faces gc --config FILE\n");
         return 2;
     }
     const bool is_cluster = cmd == "cluster";
@@ -156,6 +161,82 @@ int main(int argc, char** argv) {
         std::printf("faces=%ld people=%ld singletons=%ld\n",
                     cc.faces, cc.people, cc.singletons);
         return 0;
+    }
+
+    // gc (issue #47): remove crop files the faces table no longer
+    // references - crash-window leftovers and pre-fix orphans. Only
+    // regular files directly inside data_dir/crops, matched against the
+    // DB's own "crops/<name>" paths: nothing outside that directory is
+    // ever unlinked (the safe_crop_rel contract from process.cpp).
+    if (cmd == "gc") {
+        wfi::Db db;
+        if (!db.open(cfg.data_dir + "/index.db", err)) {
+            std::fprintf(stderr, "%s\n", err.c_str());
+            return 1;
+        }
+        std::set<std::string> keep;
+        if (!db.all_crop_paths(keep, err)) {
+            std::fprintf(stderr, "%s\n", err.c_str());
+            return 1;
+        }
+        const std::string dir = cfg.data_dir + "/crops";
+        // lstat first (CodeRabbit #99): a symlink at crops/ would make the
+        // sweep unlink files in whatever directory it points at. Only a
+        // real directory is swept.
+        struct stat dst;
+        if (lstat(dir.c_str(), &dst) != 0 && errno == ENOENT) {
+            // No crops yet: nothing to do. Same counts shape as a real
+            // sweep (CodeRabbit #99).
+            std::printf("removed=0 kept=0 failed=0\n");
+            return 0;
+        }
+        if (lstat(dir.c_str(), &dst) != 0 || !S_ISDIR(dst.st_mode) ||
+            S_ISLNK(dst.st_mode)) {
+            std::fprintf(stderr, "gc: %s is not a real directory\n",
+                         dir.c_str());
+            return 1;
+        }
+        DIR* d = opendir(dir.c_str());
+        if (d == nullptr) {
+            std::fprintf(stderr, "cannot list %s: %s\n", dir.c_str(),
+                         std::strerror(errno));
+            return 1;
+        }
+        long removed = 0, kept = 0, failed = 0;
+        struct dirent* de;
+        errno = 0;
+        while ((de = readdir(d)) != nullptr) {
+            errno = 0;
+            const std::string name = de->d_name;
+            if (name == "." || name == ".." ||
+                name.find('/') != std::string::npos) continue;
+            const std::string full = dir + "/" + name;
+            struct stat fst;
+            if (lstat(full.c_str(), &fst) != 0 || !S_ISREG(fst.st_mode))
+                continue;  // directories and links stay untouched
+            if (keep.count("crops/" + name) > 0) {
+                ++kept;
+                continue;
+            }
+            if (unlink(full.c_str()) == 0) {
+                ++removed;
+            } else {
+                ++failed;  // counted and named, never silent (review #99)
+                std::fprintf(stderr, "gc: cannot remove %s: %s\n",
+                             full.c_str(), std::strerror(errno));
+            }
+        }
+        const int read_err = errno;  // readdir ended: 0 = clean EOF
+        closedir(d);
+        if (read_err != 0) {
+            // A partial listing treated as complete would leave orphans
+            // behind silently (CodeRabbit #99).
+            std::fprintf(stderr, "gc: error reading %s: %s\n", dir.c_str(),
+                         std::strerror(read_err));
+            return 1;
+        }
+        std::printf("removed=%ld kept=%ld failed=%ld\n", removed, kept, failed);
+        return failed > 0 ? 1 : 0;
     }
 
     const std::string models = models_override.empty() ? cfg.models_dir : models_override;

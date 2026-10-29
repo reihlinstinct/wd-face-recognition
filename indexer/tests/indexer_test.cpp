@@ -1255,6 +1255,26 @@ int main() {
             check(l4.acquire(lockp, err),
                   "junk suffix is not a live pid (reclaimed)");
         }
+        // Reviewer #97: a crash between temp create and link leaves
+        // "wdf.lock.tmp.<pid>"; a dead pid's temp is swept at acquire,
+        // a live one stays.
+        {
+            const std::string dead_tmp =
+                lockp + ".tmp." + std::to_string((long)dead);
+            // getppid(): our own pid's temp is the acquirer's own
+            // scratch name and would be cleaned by the link itself.
+            const std::string live_tmp =
+                lockp + ".tmp." + std::to_string((long)getppid());
+            write_file(dead_tmp, "x");
+            write_file(live_tmp, "x");
+            wfi::InstanceLock l7;
+            check(l7.acquire(lockp, err), "acquire sweeps stale temps");
+            check(access(dead_tmp.c_str(), F_OK) != 0,
+                  "dead-pid temp swept");
+            check(access(live_tmp.c_str(), F_OK) == 0,
+                  "live-pid temp kept");
+            unlink(live_tmp.c_str());
+        }
         // An empty lockfile (a legacy or crashed writer) is stale too.
         {
             wfi::InstanceLock l5;
