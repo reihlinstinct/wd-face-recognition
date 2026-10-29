@@ -15,11 +15,17 @@ moves it into the dashboard, next to the output-folder setting.
 
 ## UI
 
-A "Scan roots" section on the existing settings page
-(`apkg/web/settings.php`): a textarea, one absolute path per line,
-prefilled from the live `wfi.conf`. Save goes through the same
-mutation contract as `people.php`: PIN or remembered session,
+A "Scan roots" section on the app page: `index.php` is the registered
+`AddonIndexPage` and already renders the settings section backed by
+`apkg/web/settings.php`; roots join it there. A textarea, one absolute
+path per line, prefilled from the live `wfi.conf`. Save goes through
+the same mutation contract as `people.php`: PIN or remembered session,
 per-session CSRF token, PRG so a refresh never repeats the write.
+
+Load/save conversion: on load, the comma-separated `roots=` value is
+split and shown one path per line; on save the validated lines are
+joined back with commas (which is why a comma inside a path is
+rejected) and capped at 16 roots.
 
 ## Validation (every line)
 
@@ -38,18 +44,24 @@ per-session CSRF token, PRG so a refresh never repeats the write.
 6. No commas in a path: `roots=` is comma-separated, so a comma
    would silently split one root into two.
 7. Dedupe; at most 16 roots; at most 512 bytes per path.
-7. The empty list is valid - it is the shipped default (the indexer
+8. The empty list is valid - it is the shipped default (the indexer
    scans nothing).
 
 ## Persistence
 
 Rewrite only the `roots=` line; every other line of `wfi.conf` is
-preserved verbatim, and a missing line is appended. The write is
-atomic: `wfi.conf.tmp.<pid>` in the same directory, `fflush` +
-`fsync`, then `rename()` over `wfi.conf`. `init.sh` already uses the
-temp + `mv` half of this pattern (pinned by
-`apkg/tests/init_conf_test.sh`); the page adds the `fsync` before the
-rename.
+preserved verbatim, and a missing line is appended.
+
+`wdf_wfi_config_path()` points next to the app - and on device
+`init.sh` makes that path a SYMLINK to the real file in the persistent
+data path. The save therefore resolves the symlink first and writes
+beside the TARGET: `wfi.conf.tmp.<pid>` in the target's directory,
+`fflush` + `fsync`, then `rename()` over the target. Renaming over the
+symlink path itself would silently replace the link with a regular
+file and detach the app from its persistent config. A test pins the
+symlink surviving a save. `init.sh` already uses the temp + `mv` half
+of this pattern (pinned by `apkg/tests/init_conf_test.sh`); the page
+adds the `fsync` before the rename.
 
 ## Apply-time semantics
 
