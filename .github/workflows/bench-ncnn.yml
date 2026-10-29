@@ -77,6 +77,8 @@ jobs:
           path: docs/BENCHMARK.md
 
   summary:
+    permissions:
+      contents: read
     name: Run summary
     if: always()
     needs: [ncnn-spike]

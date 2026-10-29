@@ -69,6 +69,8 @@ jobs:
           path: docs/BENCHMARK-LANGUAGE.md
 
   summary:
+    permissions:
+      contents: read
     name: Run summary
     if: always()
     needs: [shootout]

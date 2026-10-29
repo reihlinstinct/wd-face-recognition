@@ -116,6 +116,8 @@ jobs:
             /tmp/bad.log
 
   summary:
+    permissions:
+      contents: read
     name: Run summary
     if: always()
     needs: [wdf-demo]

@@ -147,6 +147,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   summary:
+    permissions:
+      contents: read
     name: Run summary
     if: always()
     needs: [lint, test, demo-scan-test, indexer-test, security, secret-scan]
