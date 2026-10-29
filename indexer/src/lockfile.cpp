@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace wfi {
@@ -58,13 +59,25 @@ bool InstanceLock::acquire(const std::string& path, std::string& err) {
             err = "cannot create the lockfile " + path + ": " + std::strerror(errno);
             return false;
         }
+        struct stat before;
+        if (stat(path.c_str(), &before) != 0) continue;  // vanished: retry
         const long holder = read_pid(path);
         if (holder > 0 && pid_alive(holder)) {
             err = "another instance is already running (pid " +
                   std::to_string(holder) + "), exiting";
             return false;
         }
-        // Stale (dead PID, unreadable, or corrupt): reclaim and retry once.
+        // Stale (dead PID, unreadable, or corrupt) - but reclaim only the
+        // exact file checked above: a fresh live lock that landed in the
+        // meantime carries a different inode and must not be unlinked
+        // (reviewer #97). The check and the unlink still neighbour each
+        // other; the window shrinks to that pair.
+        struct stat now;
+        if (stat(path.c_str(), &now) != 0) continue;  // vanished: retry
+        if (now.st_ino != before.st_ino || now.st_dev != before.st_dev) {
+            err = "another instance is already running, exiting";
+            return false;
+        }
         unlink(path.c_str());
     }
     // Lost the reclaim race twice: treat as held.
