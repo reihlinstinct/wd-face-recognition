@@ -56,15 +56,15 @@ $gate = function (string $f) use ($tmp): void {
 
 check($wait('ready'), 'child rendered the page (GET)');
 
-$gate('go-invalid');
-check($wait('go-invalid-done'), 'invalid POST ran');
-check(file_get_contents($conf) === "data_dir={$tmp}/data\nroots=\n",
-    'invalid root leaves the config untouched');
-
 $gate('go-badpin');
 check($wait('go-badpin-done'), 'wrong-PIN POST ran');
 check(file_get_contents($conf) === "data_dir={$tmp}/data\nroots=\n",
     'wrong PIN leaves the config untouched');
+
+$gate('go-invalid');
+check($wait('go-invalid-done'), 'invalid POST ran');
+check(file_get_contents($conf) === "data_dir={$tmp}/data\nroots=\n",
+    'invalid root leaves the config untouched');
 
 $gate('go-valid');
 check($wait('go-valid-done'), 'valid save POST ran');

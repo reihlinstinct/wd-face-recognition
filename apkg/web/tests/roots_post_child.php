@@ -19,16 +19,17 @@ if ($csrf === '') {
 }
 file_put_contents($tmp . '/ready', '1');
 
-// Order matters: the successful save ends with the PRG exit, so the
-// valid POST must be the LAST phase.
+// Order matters: a correct PIN MARKS the session (remembered browser),
+// so the wrong-PIN phase must run FIRST, before any correct PIN; and a
+// successful save ends with the PRG exit, so the valid POST is LAST.
 $phases = [
-    'go-invalid' => [
-        'pin' => '0123abcd4567',
-        'roots' => $GLOBALS['argv'][2] . "\n" . $GLOBALS['argv'][4],  // missing dir
-    ],
     'go-badpin' => [
         'pin' => 'wrong-pin-0000',
         'roots' => $GLOBALS['argv'][3],
+    ],
+    'go-invalid' => [
+        'pin' => '0123abcd4567',
+        'roots' => $GLOBALS['argv'][2] . "\n" . $GLOBALS['argv'][4],  // missing dir
     ],
     'go-valid' => [
         'pin' => '0123abcd4567',
