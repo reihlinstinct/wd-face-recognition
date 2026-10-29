@@ -78,6 +78,9 @@ public:
     // Marks rows not seen by this job (per root) as missing; returns the
     // count, or -1 on a DB error.
     long sweep_missing(long job_id, const std::string& root);
+    // Every distinct root the photos table carries, sorted. Used to sweep
+    // roots that are no longer configured (root removal, #102).
+    bool distinct_roots(std::vector<std::string>& out, std::string& err);
     // Returns false when the update could not be persisted.
     bool finish_job(long job_id, const ScanCounts& c);
     // Up to `limit` photos in state 'queued', oldest first by path.

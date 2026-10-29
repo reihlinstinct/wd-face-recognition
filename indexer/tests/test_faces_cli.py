@@ -310,6 +310,50 @@ crops = {f.get("crop") for f in person.get("faces", [])}
 check(r.returncode == 0 and crops == {"crops/seed.jpg", "crops/seed2.jpg"},
       "the actual moved crop is listed under the target")
 
+# Missing photos are out of everything identity-shaped (root removal,
+# #102): people counts, person details and cluster input exclude their
+# faces - but the rows AND the cluster membership stay, so a restored
+# photo rejoins the SAME person (name preserved).
+db = sqlite3.connect(dbp)
+db.execute("UPDATE photos SET state='missing' WHERE id=?", (photo_id,))
+db.commit()
+db.close()
+r = run("people", "--config", conf)
+people = json.loads(r.stdout) if r.returncode == 0 else []
+kept = [p for p in people if p["id"] == keep_id]
+check(kept and kept[0]["faces"] == 0,
+      "people count excludes missing-photo faces")
+r = run("person", "--config", conf, "--id", str(keep_id))
+person = json.loads(r.stdout) if r.returncode == 0 else {}
+check(r.returncode == 0 and person.get("faces") == [],
+      "person details exclude missing-photo faces")
+r = run("cluster", "--config", conf)
+check(r.returncode == 0 and r.stdout.strip() ==
+      "faces=0 people=0 singletons=0", "cluster input excludes missing faces")
+db = sqlite3.connect(dbp)
+row = db.execute("SELECT COUNT(*) FROM faces WHERE cluster_id IS NULL"
+                 ).fetchone()
+name = db.execute("SELECT name FROM clusters WHERE id=?",
+                  (keep_id,)).fetchone()
+db.close()
+check(row[0] == 0, "missing faces keep their cluster membership")
+check(name is not None and name[0] == "EmptyOK",
+      "all-missing person survives a rebuild with its name")
+r = run("people", "--config", conf)
+people = json.loads(r.stdout) if r.returncode == 0 else []
+kept = [p for p in people if p["id"] == keep_id]
+check(kept and kept[0]["faces"] == 0 and kept[0]["name"] == "EmptyOK",
+      "all-missing person still listed at zero faces")
+db = sqlite3.connect(dbp)
+db.execute("UPDATE photos SET state='done' WHERE id=?", (photo_id,))
+db.commit()
+db.close()
+r = run("people", "--config", conf)
+people = json.loads(r.stdout) if r.returncode == 0 else []
+kept = [p for p in people if p["id"] == keep_id]
+check(kept and kept[0]["faces"] == 2,
+      "restored photo rejoins the same person")
+
 if fails:
     print(f"test_faces_cli: {fails} FAILURES", file=sys.stderr)
     sys.exit(1)

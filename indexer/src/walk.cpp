@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cerrno>
 #include <cctype>
+#include <cstdlib>
 #include <dirent.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <vector>
 
@@ -87,6 +89,59 @@ bool walk_dir(Db& db, long job_id, const std::string& root, const std::string& a
 bool scan_root(Db& db, long job_id, const std::string& root,
                int max_depth, ScanCounts& c, std::string& err) {
     return walk_dir(db, job_id, root, root, 0, max_depth, c, err);
+}
+
+std::string canonical_root(const std::string& path) {
+    char resolved[PATH_MAX];
+    if (realpath(path.c_str(), resolved) != nullptr) return resolved;
+    // The root may not exist (unmounted share): fall back to a lexical
+    // cleanup so the overlap gate still has a stable form to compare.
+    std::vector<std::string> segs;
+    std::string cur;
+    const bool absolute = !path.empty() && path[0] == '/';
+    for (const char ch : path) {
+        if (ch == '/') {
+            if (cur == "..") {
+                if (!segs.empty()) segs.pop_back();
+            } else if (!cur.empty() && cur != ".") {
+                segs.push_back(cur);
+            }
+            cur.clear();
+        } else {
+            cur += ch;
+        }
+    }
+    if (cur == "..") {
+        if (!segs.empty()) segs.pop_back();
+    } else if (!cur.empty() && cur != ".") {
+        segs.push_back(cur);
+    }
+    std::string out = absolute ? "/" : "";
+    for (size_t i = 0; i < segs.size(); ++i) {
+        if (i > 0 || absolute) {
+            if (out.empty() || out.back() != '/') out += '/';
+        }
+        out += segs[i];
+    }
+    if (out.empty()) out = absolute ? "/" : path;
+    return out;
+}
+
+bool roots_overlap(const std::string& canonical_a, const std::string& canonical_b) {
+    if (canonical_a == canonical_b) return true;
+    // Ancestor test with a segment boundary: "/a/b" is an ancestor of
+    // "/a/b/c" but not of "/a/bc".
+    if (canonical_a.size() < canonical_b.size() &&
+        canonical_b.compare(0, canonical_a.size(), canonical_a) == 0 &&
+        (canonical_a == "/" || canonical_b[canonical_a.size()] == '/')) {
+        return true;
+    }
+    if (canonical_b.size() < canonical_a.size() &&
+        canonical_a.compare(0, canonical_b.size(), canonical_b) == 0 &&
+        (canonical_b == "/" || canonical_a[canonical_b.size()] == '/')) {
+        return true;
+    }
+    return false;
 }
 
 }  // namespace wfi

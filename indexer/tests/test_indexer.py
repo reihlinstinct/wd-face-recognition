@@ -88,9 +88,102 @@ def main():
     states = dict(db.execute("SELECT path, state FROM photos").fetchall())
     assert states[os.path.join(deep, "deep.jpg")] == "queued", states
 
-    # Empty roots (issue #108): the fresh-install default and a cleared
-    # list are a successful no-op walk, never an error, and the existing
-    # index is left byte-for-byte alone (no false missing sweep).
+    # One job per run, shared across roots (root removal, #102): a
+    # two-root scan writes ONE scan_jobs row, and neither root's sweep
+    # can mark the other root's photos (observed earlier in the SAME
+    # run) missing.
+    multi = os.path.join(tmp, "multi")
+    ra, rb, mdata = (os.path.join(multi, d) for d in ("A", "B", "data"))
+    os.makedirs(ra)
+    os.makedirs(rb)
+    os.makedirs(mdata)
+    for d, name in ((ra, "pa.jpg"), (rb, "pb.jpg")):
+        with open(os.path.join(d, name), "w") as f:
+            f.write("x")
+    mconf = os.path.join(multi, "wfi.conf")
+    with open(mconf, "w") as f:
+        f.write(f"roots={ra},{rb}\ndata_dir={mdata}\n")
+    run(bin_path, mconf)
+    mdb = sqlite3.connect(os.path.join(mdata, "index.db"))
+    jobs = mdb.execute("SELECT root FROM scan_jobs").fetchall()
+    assert jobs == [(f"{ra},{rb}",)], jobs
+    os.unlink(os.path.join(ra, "pa.jpg"))
+    out = run(bin_path, mconf)
+    jobs = mdb.execute("SELECT root, missing FROM scan_jobs").fetchall()
+    assert len(jobs) == 2 and jobs[1] == (f"{ra},{rb}", 1), jobs
+    states = dict(mdb.execute("SELECT path, state FROM photos").fetchall())
+    assert states[os.path.join(ra, "pa.jpg")] == "missing", states
+    assert states[os.path.join(rb, "pb.jpg")] == "queued", states
+    mdb.close()
+
+    # Narrowing (docs/ROOTS-SETTINGS.md regression a): indexed under
+    # Photos, narrowed to Photos/2020 - the still-covered photo keeps
+    # its stored root and state via the shared job stamp; the rest flip
+    # to missing under the unconfigured-root sweep.
+    photos_dir = os.path.join(tmp, "narrow", "Photos")
+    y20 = os.path.join(photos_dir, "2020")
+    y21 = os.path.join(photos_dir, "2021")
+    ndata = os.path.join(tmp, "narrow", "data")
+    os.makedirs(y20)
+    os.makedirs(y21)
+    os.makedirs(ndata)
+    for d in (y20, y21):
+        with open(os.path.join(d, "p.jpg"), "w") as f:
+            f.write("x")
+    nconf = os.path.join(tmp, "narrow", "wfi.conf")
+    with open(nconf, "w") as f:
+        f.write(f"roots={photos_dir}\ndata_dir={ndata}\n")
+    run(bin_path, nconf)
+    with open(nconf, "w") as f:
+        f.write(f"roots={y20}\ndata_dir={ndata}\n")
+    out = run(bin_path, nconf)
+    assert f"root={photos_dir} (unconfigured) missing=1" in out, out
+    ndb = sqlite3.connect(os.path.join(ndata, "index.db"))
+    states = dict(ndb.execute("SELECT path, state FROM photos").fetchall())
+    assert states[os.path.join(y20, "p.jpg")] == "queued", states
+    assert states[os.path.join(y21, "p.jpg")] == "missing", states
+    roots_seen = dict(ndb.execute("SELECT path, root FROM photos").fetchall())
+    assert roots_seen[os.path.join(y20, "p.jpg")] == photos_dir, roots_seen
+    jobs = ndb.execute("SELECT root FROM scan_jobs ORDER BY id").fetchall()
+    assert jobs == [(photos_dir,), (y20,)], jobs
+
+    # Narrowing with an unreadable covered subdir (regression b): the
+    # incomplete walk suppresses the unconfigured sweep too - nothing
+    # may flip while coverage is partial.
+    priv = os.path.join(y20, "priv")
+    os.makedirs(priv)
+    with open(os.path.join(priv, "q.jpg"), "w") as f:
+        f.write("x")
+    with open(nconf, "w") as f:
+        f.write(f"roots={photos_dir}\ndata_dir={ndata}\n")
+    run(bin_path, nconf)  # full coverage again: y21 + priv re-queued
+    with open(nconf, "w") as f:
+        f.write(f"roots={y20}\ndata_dir={ndata}\n")
+    os.chmod(priv, 0)
+    try:
+        os.listdir(priv)
+        blocked = False
+    except PermissionError:
+        blocked = True
+    try:
+        out = run(bin_path, nconf)
+    finally:
+        os.chmod(priv, 0o755)
+    if blocked:
+        # The mode really blocked opendir: both sweeps must stay off.
+        assert "INCOMPLETE (unreadable dir)" in out, out
+        assert "(unconfigured) sweep suppressed" in out, out
+        states = dict(ndb.execute("SELECT path, state FROM photos").fetchall())
+        assert all(st == "queued" for st in states.values()), states
+    else:
+        # Privilege override: the walk completed, normal narrowing rules.
+        assert "INCOMPLETE" not in out, out
+    ndb.close()
+
+    # Empty roots (#108): the fresh-install default is a successful run,
+    # never an error. The walk no-ops; the run still opens one job and
+    # sweeps (nothing is stored yet), so the index appears with zero
+    # photos and one finished job.
     empty_data = os.path.join(tmp, "empty-data")
     os.makedirs(empty_data)
     econf = os.path.join(tmp, "empty.conf")
@@ -101,9 +194,15 @@ def main():
     assert r.returncode == 0, f"empty-roots scan failed: {r.stderr}"
     assert "no roots configured" in r.stdout, r.stdout
     assert r.stderr == "", r.stderr
-    assert not os.path.exists(os.path.join(empty_data, "index.db")), \
-        "no-op scan must not create an index"
+    edb = sqlite3.connect(os.path.join(empty_data, "index.db"))
+    assert edb.execute("SELECT COUNT(*) FROM photos").fetchone()[0] == 0
+    assert edb.execute("SELECT COUNT(*) FROM scan_jobs").fetchone()[0] == 1
+    edb.close()
 
+    # Cleared after indexing (root removal, #102): the zero-root run
+    # sweeps EVERY stored root - all photos flip to missing under one
+    # new shared job. Reversible: re-adding the root re-queues them
+    # through the normal missing -> changed path.
     cleared = os.path.join(tmp, "cleared.conf")
     with open(cleared, "w") as f:
         f.write(f"roots=\ndata_dir={data}\n")
@@ -114,9 +213,16 @@ def main():
     assert r.returncode == 0, f"cleared-roots scan failed: {r.stderr}"
     assert "no roots configured" in r.stdout, r.stdout
     after = dict(db.execute("SELECT path, state FROM photos").fetchall())
-    assert after == before, (before, after)
+    assert set(after) == set(before), (before, after)  # no rows lost
+    assert all(st == "missing" for st in after.values()), after
     jobs_after = db.execute("SELECT COUNT(*) FROM scan_jobs").fetchone()[0]
-    assert jobs_after == jobs_before, (jobs_before, jobs_after)
+    assert jobs_after == jobs_before + 1, (jobs_before, jobs_after)
+    run(bin_path, conf)  # the original single-root config, restored
+    states = dict(db.execute("SELECT path, state FROM photos").fetchall())
+    # b.jpg is gone from disk and stays missing; the rest re-queue.
+    assert states[os.path.join(root, "sub", "b.jpg")] == "missing", states
+    assert states[a] == "queued", states
+    assert states[os.path.join(deep, "deep.jpg")] == "queued", states
 
     print("test_indexer: all assertions passed")
 

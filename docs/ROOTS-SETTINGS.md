@@ -77,13 +77,15 @@ not an error: a fresh install ships with no roots (privacy first,
 #56), and erroring on the shipped default would brick every new
 install's first run. "No-op" scopes to the scan only - the DB work
 below keeps running.
-Shipped matrix (#108, per CodeRabbit #103): only the WALK is the
-no-op; DB work keeps running. `load_config` accepts zero roots;
-`wdf_indexer` prints "no roots configured - nothing to scan", skips
-the walk and exits 0 WITHOUT touching the DB (no job, no sweep -
-clearing roots never false-marks stored photos missing); `wdf_faces`
-DB operations (`process`, `cluster`, `gc`, people rename/merge) keep
-operating on the existing index; read commands are unaffected. The
+Shipped matrix (#108 + root removal, per CodeRabbit #103): only the
+WALK is the no-op; DB work keeps running. `load_config` accepts zero
+roots; `wdf_indexer` prints "no roots configured - nothing to scan",
+skips the walk and exits 0 - but still opens the run's one shared job
+and sweeps every stored root under it (the zero-root corner of the
+removal rule below: clearing ALL roots flips every indexed photo to
+`missing`, reversibly); `wdf_faces` DB operations (`process`,
+`cluster`, `gc`, people rename/merge) keep operating on the existing
+index; read commands are unaffected. The
 contract test pins BOTH halves end to end (CodeRabbit #103): on a
 fresh install, empty `roots=` -> both binaries succeed, the DB gains
 no photos, stderr carries no error; and with a SEEDED index (a photo,
@@ -94,13 +96,13 @@ the index.
 
 ## Root removal semantics
 
-`sweep_missing` runs per CONFIGURED root, so today a root deleted from
-`roots=` is never walked and never swept: its photos stay `scanned`
-forever, and their faces keep feeding people identities - stale
-clusters and missed missing-file sweeps (CodeRabbit #103). The
-implementation PR closes this in the indexer: after sweeping each
-configured root, `wdf_indexer` also sweeps every DISTINCT `root`
-stored in `photos` that is no longer configured. Such a sweep needs no
+`sweep_missing` used to run per CONFIGURED root, so a root deleted
+from `roots=` was never walked and never swept: its photos stayed
+`scanned` forever, and their faces kept feeding people identities -
+stale clusters and missed missing-file sweeps (CodeRabbit #103).
+Shipped: after sweeping each configured root, `wdf_indexer` also
+sweeps every DISTINCT `root` stored in `photos` that is no longer
+configured. Such a sweep needs no
 walk, and only its photos NOT observed in the run's shared job flip
 to `missing`: an overlapping configured root may have re-observed
 some of them. Unchanged re-observations keep their stored root and
@@ -111,11 +113,12 @@ entirely - both kinds escape the sweep. The rest flip to `missing`,
 their faces stop feeding identity rebuilds, and re-adding the root
 later re-queues them through the normal `missing -> changed` path.
 
-One job generation per RUN, shared by every configured root and by the
-unconfigured-root sweeps (CodeRabbit #103): `sweep_missing` marks
-photos whose `last_seen_job` differs from the sweeping job, so
-per-root job ids would mark photos observed earlier in the SAME run as
-missing. The zero-root corner follows from the same rule: a run with
+Shipped as one job generation per RUN, shared by every configured
+root and by the unconfigured-root sweeps (CodeRabbit #103):
+`sweep_missing` marks photos whose `last_seen_job` differs from the
+sweeping job, so per-root job ids would mark photos observed earlier
+in the SAME run as missing. `scan_jobs.root` records the run's
+comma-joined root list. The zero-root corner follows from the same rule: a run with
 no configured roots still opens one job and sweeps every stored root
 under it - clearing ALL roots flips every indexed photo to `missing`
 (reversible; re-adding a root restores it).
@@ -145,14 +148,20 @@ flips nothing.
 
 ## Missing photos and identity data
 
-A photo in `missing` state must be excluded consistently from
-everything identity-shaped: embedding loads, cluster input, people
-counts, person details (or its faces detached). The implementation PR
-audits each consumer query for the state filter. The root-removal test
-verifies the full cycle through `process`/`cluster`, not just the
-state column: scan with the root, rescan without it (photos `missing`,
-their faces out of clustering and people), re-add the root (photos and
-faces back).
+A photo in `missing` state is excluded consistently from everything
+identity-shaped (shipped, #102): embedding loads / cluster input
+(`all_face_embeddings`), people counts and cover crops
+(`people_list`), and person details (`person_faces`) all filter
+`p.state != 'missing'`. The face ROWS stay - exclusion, not detachment
+- and `replace_clusters` keeps both the membership of missing-photo
+faces and any live cluster whose remaining faces sit on missing
+photos, so a name survives an all-missing rebuild and a restored root
+rejoins the SAME person through the normal overlap claim. `gc` still
+counts missing photos' crops as referenced (nothing is unlinked while
+a restore is possible). The root-removal tests verify the full cycle,
+not just the state column: scan with the root, rescan without it
+(photos `missing`, faces out of clustering and people, person intact),
+re-add the root (photos and faces back).
 
 ## Apply-time semantics
 

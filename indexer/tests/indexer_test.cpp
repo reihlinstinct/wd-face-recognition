@@ -71,11 +71,36 @@ int main() {
     check(wfi::load_config(tmp + "/noroots.conf", ecfg, err), "absent roots= loads");
     check(ecfg.roots.empty(), "absent roots= yields no roots");
 
+    // canonical_root + roots_overlap: the rule-9 relation behind the
+    // unconfigured-sweep gate (root removal, #102). Nonexistent paths
+    // exercise the lexical fallback; tmp exists, so realpath answers.
+    check(wfi::canonical_root("/nonexistent-x//y/./z") == "/nonexistent-x/y/z",
+          "lexical cleanup collapses slashes and dot");
+    check(wfi::canonical_root("/nonexistent-x/y/../z") == "/nonexistent-x/z",
+          "lexical cleanup resolves dotdot");
+    check(wfi::canonical_root("/nonexistent-x/y/") == "/nonexistent-x/y",
+          "trailing slash stripped");
+    check(wfi::canonical_root(tmp + "/sub/../") == tmp,
+          "existing path canonicalized by realpath");
+    check(wfi::roots_overlap("/a", "/a/b"), "ancestor overlaps");
+    check(wfi::roots_overlap("/a/b", "/a"), "descendant overlaps");
+    check(wfi::roots_overlap("/a", "/a"), "equal overlaps");
+    check(wfi::roots_overlap("/", "/a"), "filesystem root overlaps all");
+    check(!wfi::roots_overlap("/a/b", "/a/bc"),
+          "shared prefix without a segment boundary is not an overlap");
+    check(!wfi::roots_overlap("/a", "/b"), "unrelated roots do not overlap");
+
     // First scan: two JPEGs queued (txt ignored).
     long job1 = db.begin_job(root);
     wfi::ScanCounts c1;
     check(wfi::scan_root(db, job1, root, 8, c1, err), "first scan runs");
     db.sweep_missing(job1, root);
+    {
+        std::vector<std::string> stored;
+        check(db.distinct_roots(stored, err), "distinct_roots reads");
+        check(stored.size() == 1 && stored[0] == root,
+              "distinct_roots returns the scanned root");
+    }
     db.finish_job(job1, c1);
     check(c1.scanned == 2 && c1.added == 2 && c1.skipped == 0 && c1.changed == 0,
           "first scan queues all JPEGs");

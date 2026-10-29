@@ -14,4 +14,15 @@ struct ScanCounts;
 bool scan_root(Db& db, long job_id, const std::string& root,
                int max_depth, ScanCounts& counts, std::string& err);
 
+// Canonical form of a root path for the overlap gate (root removal, #102):
+// realpath() when the path exists, else a lexical cleanup (duplicate
+// slashes, "." and ".." segments, trailing slash). Never empty for a
+// nonempty input.
+std::string canonical_root(const std::string& path);
+
+// True when two canonical roots are equal or one is an ancestor of the
+// other (the rule-9 relation in docs/ROOTS-SETTINGS.md). Used to gate
+// unconfigured-root sweeps on the completeness of overlapping walks.
+bool roots_overlap(const std::string& canonical_a, const std::string& canonical_b);
+
 }  // namespace wfi

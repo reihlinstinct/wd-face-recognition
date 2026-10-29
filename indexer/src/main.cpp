@@ -7,6 +7,8 @@
 #include <cstring>
 #include <string>
 #include <sys/stat.h>
+#include <utility>
+#include <vector>
 
 #include "config.h"
 #include "db.h"
@@ -38,12 +40,10 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (cfg.roots.empty()) {
-        // Nothing to walk (issue #108): exit successfully WITHOUT touching
-        // the DB - no job, no sweep, so clearing roots never false-marks
-        // stored photos missing. Sweeping unconfigured roots is the
-        // root-removal follow-up (docs/ROOTS-SETTINGS.md).
+        // Not an error (#108): the walk no-ops, but the run still opens one
+        // job and sweeps every stored root below - clearing ALL roots flips
+        // every indexed photo to missing, reversibly (#102).
         std::printf("no roots configured - nothing to scan\n");
-        return 0;
     }
     // The index holds face data: never world-readable (review #45).
     umask(0077);
@@ -59,18 +59,43 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", err.c_str());
         return 1;
     }
-    wfi::ScanCounts total;
+
+    // One job generation per RUN, shared by every configured root and by
+    // the unconfigured-root sweeps (root removal, #102): sweep_missing
+    // marks photos whose last_seen_job differs from the sweeping job, so
+    // per-root job ids would mark photos observed earlier in the SAME run
+    // as missing. scan_jobs.root records the run's root list (roots never
+    // contain commas - rule 6, docs/ROOTS-SETTINGS.md).
+    std::string job_roots;
+    for (size_t i = 0; i < cfg.roots.size(); ++i) {
+        if (i > 0) job_roots += ',';
+        job_roots += cfg.roots[i];
+    }
+    const long job = db.begin_job(job_roots);
+    if (job == 0) {
+        std::fprintf(stderr, "cannot start scan job\n");
+        return 1;
+    }
+
+    // Walk every configured root BEFORE any sweep: an overlapping
+    // unconfigured stored root's photos may be re-observed under a
+    // surviving configured root, and only the shared job stamp exempts
+    // them from that root's sweep.
+    std::vector<std::string> roots_done;       // canonical, completed walks
+    std::vector<std::string> roots_all;        // canonical, every configured root
+    std::vector<std::pair<std::string, wfi::ScanCounts>> walked;
     for (const std::string& root : cfg.roots) {
-        long job = db.begin_job(root);
-        if (job == 0) {
-            std::fprintf(stderr, "cannot start scan job for %s\n", root.c_str());
-            return 1;
-        }
         wfi::ScanCounts c;
         if (!wfi::scan_root(db, job, root, max_depth, c, err)) {
             std::fprintf(stderr, "scan failed under %s: %s\n", root.c_str(), err.c_str());
             return 1;
         }
+        walked.push_back({root, c});
+        roots_all.push_back(wfi::canonical_root(root));
+    }
+
+    wfi::ScanCounts total;
+    for (auto& [root, c] : walked) {
         if (c.incomplete || c.depth_capped) {
             // Coverage is partial (unreadable dirs, or the walk stopped at
             // --max-depth): never sweep - a missing-mark here would be a
@@ -85,15 +110,61 @@ int main(int argc, char** argv) {
                 return 1;
             }
             c.missing = swept;
-        }
-        if (!db.finish_job(job, c)) {
-            std::fprintf(stderr, "could not persist scan job for %s\n", root.c_str());
-            return 1;
+            roots_done.push_back(wfi::canonical_root(root));
         }
         std::printf("root=%s scanned=%ld new=%ld changed=%ld skipped=%ld missing=%ld\n",
                     root.c_str(), c.scanned, c.added, c.changed, c.skipped, c.missing);
         total.scanned += c.scanned; total.added += c.added; total.changed += c.changed;
         total.skipped += c.skipped; total.missing += c.missing;
+    }
+
+    // Roots deleted from roots= are never walked, so without this pass
+    // their photos would stay scanned (and keep feeding people identities)
+    // forever (#102). An unconfigured stored root is swept under the
+    // run's shared job only when EVERY overlapping configured root's walk
+    // completed: re-observed photos carry the job stamp (unchanged) or
+    // adopted the walk's root (changed), so a complete overlapping walk
+    // makes the sweep exact, and an incomplete one must suppress it.
+    std::vector<std::string> stored;
+    if (!db.distinct_roots(stored, err)) {
+        std::fprintf(stderr, "cannot list stored roots: %s\n", err.c_str());
+        return 1;
+    }
+    for (const std::string& r : stored) {
+        const std::string cr = wfi::canonical_root(r);
+        bool configured = false;
+        for (const std::string& ca : roots_all) {
+            if (ca == cr) { configured = true; break; }
+        }
+        if (configured) continue;  // swept (or deliberately skipped) above
+        bool gate_ok = true;
+        for (size_t i = 0; i < roots_all.size(); ++i) {
+            if (!wfi::roots_overlap(cr, roots_all[i])) continue;
+            bool done = false;
+            for (const std::string& cd : roots_done) {
+                if (cd == roots_all[i]) { done = true; break; }
+            }
+            if (!done) { gate_ok = false; break; }
+        }
+        if (!gate_ok) {
+            std::printf("root=%s (unconfigured) sweep suppressed - overlapping walk incomplete\n",
+                        r.c_str());
+            continue;
+        }
+        const long swept = db.sweep_missing(job, r);
+        if (swept < 0) {
+            std::fprintf(stderr, "missing sweep failed for %s\n", r.c_str());
+            return 1;
+        }
+        total.missing += swept;
+        if (swept > 0) {
+            std::printf("root=%s (unconfigured) missing=%ld\n", r.c_str(), swept);
+        }
+    }
+
+    if (!db.finish_job(job, total)) {
+        std::fprintf(stderr, "could not persist scan job\n");
+        return 1;
     }
     std::printf("total scanned=%ld new=%ld changed=%ld skipped=%ld missing=%ld\n",
                 total.scanned, total.added, total.changed, total.skipped, total.missing);
