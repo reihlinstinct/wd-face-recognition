@@ -1,9 +1,10 @@
 <?php
 // Handler-level rename test (issue #95, CodeRabbit #89 follow-up): the
 // people.php POST handler must pass the TRIMMED name to wdf_faces
-// --name. The stub records its argv; a space+NBSP-wrapped name must
-// arrive trimmed. The stub exits 1 on mutations so the handler renders
-// instead of taking its PRG exit, letting the include return.
+// --name. The handler runs in a CHILD process (people_post_child.php):
+// its success path calls exit, which would otherwise skip these
+// assertions silently (CodeRabbit #96). The stub wdf_faces records its
+// argv; the parent asserts --name carries the trimmed value.
 // Run: php apkg/web/tests/people_post_test.php
 
 $fails = 0;
@@ -15,52 +16,41 @@ function check(bool $cond, string $label): void {
     }
 }
 
-$tmp = sys_get_temp_dir() . '/wdf-people-post-' . getmypid();
-@mkdir($tmp . '/app/bin', 0777, true);
-@mkdir($tmp . '/sess', 0777, true);
+// Unpredictable 0700 temp dir (CodeRabbit #96): a PID-based name is a
+// symlink target on shared machines.
+$tmp = tempnam(sys_get_temp_dir(), 'wdf-pp-');
+if ($tmp === false || !unlink($tmp) || !mkdir($tmp, 0700)) {
+    fwrite(STDERR, "cannot create temp dir\n");
+    exit(1);
+}
+mkdir($tmp . '/app/bin', 0700, true);
+mkdir($tmp . '/sess', 0700, true);
 
 // Stub wdf_faces: log argv (one per line), serve an empty people list,
-// fail mutations so the handler skips its PRG exit.
+// succeed on mutations so the handler takes its PRG exit path.
 $argsLog = $tmp . '/args.log';
 file_put_contents($tmp . '/app/bin/wdf_faces',
     "#!/bin/sh\n"
     . "printf '%s\n' \"\$@\" >> \"\$WDF_ARGS_LOG\"\n"
-    . "if [ \"\$1\" = people ]; then echo '[]'; exit 0; fi\n"
-    . "exit 1\n");
-chmod($tmp . '/app/bin/wdf_faces', 0755);
+    . "if [ \"\$1\" = people ]; then echo '[]'; fi\n"
+    . "exit 0\n");
+chmod($tmp . '/app/bin/wdf_faces', 0700);
 
-$pinFile = $tmp . '/demo-pin.txt';
-file_put_contents($pinFile, "0123abcd4567\n");
-$conf = $tmp . '/wfi.conf';
-file_put_contents($conf, "data_dir={$tmp}/data\nroots=/photos\n");
+file_put_contents($tmp . '/demo-pin.txt', "0123abcd4567\n");
+file_put_contents($tmp . '/wfi.conf', "data_dir={$tmp}/data\nroots=/photos\n");
 
 putenv('WDF_APP_DIR=' . $tmp . '/app');
-putenv('WDF_PIN_FILE=' . $pinFile);
-putenv('WDF_WFI_CONFIG=' . $conf);
+putenv('WDF_PIN_FILE=' . $tmp . '/demo-pin.txt');
+putenv('WDF_WFI_CONFIG=' . $tmp . '/wfi.conf');
 putenv('WDF_ARGS_LOG=' . $argsLog);
 
-session_save_path($tmp . '/sess');
-
-// GET: seeds the session CSRF token (and exercises the list path).
-$_SERVER['REQUEST_METHOD'] = 'GET';
-ob_start();
-include __DIR__ . '/../people.php';
-ob_end_clean();
-$csrf = $_SESSION['csrf'] ?? '';
-check($csrf !== '', 'GET seeds the session CSRF token');
-
-// POST: rename wrapped in spaces and a trailing NBSP (U+00A0).
-$_SERVER['REQUEST_METHOD'] = 'POST';
-$_POST = [
-    'pin' => '0123abcd4567',
-    'csrf' => $csrf,
-    'action' => 'rename',
-    'id' => '1',
-    'name' => "  דנה\u{00A0}",
-];
-ob_start();
-include __DIR__ . '/../people.php';
-ob_end_clean();
+$desc = [1 => ['file', $tmp . '/child.out', 'w'],
+         2 => ['file', $tmp . '/child.err', 'w']];
+$proc = proc_open(
+    [PHP_BINARY, __DIR__ . '/people_post_child.php', $tmp], $desc, $pipes);
+check(is_resource($proc), 'child process launches');
+$rc = is_resource($proc) ? proc_close($proc) : -1;
+check($rc === 0, 'child exits 0 (rename accepted, PRG path)');
 
 $log = is_file($argsLog) ? (string)file_get_contents($argsLog) : '';
 check(strpos($log, "rename\n") !== false, 'rename reached the stub');
@@ -68,6 +58,18 @@ check(strpos($log, "--name\nדנה\n") !== false,
     '--name carries the trimmed name');
 check(strpos($log, "  דנה") === false && strpos($log, "דנה\u{00A0}") === false,
     'no untrimmed form reaches the CLI');
+
+// Cleanup (best effort).
+foreach ([$tmp . '/app/bin/wdf_faces', $tmp . '/demo-pin.txt',
+          $tmp . '/wfi.conf', $tmp . '/args.log', $tmp . '/child.out',
+          $tmp . '/child.err'] as $f) {
+    @unlink($f);
+}
+foreach (glob($tmp . '/sess/*') ?: [] as $f) {
+    @unlink($f);
+}
+@rmdir($tmp . '/app/bin'); @rmdir($tmp . '/app'); @rmdir($tmp . '/sess');
+@rmdir($tmp);
 
 if ($fails > 0) {
     fwrite(STDERR, "{$fails} check(s) failed\n");
