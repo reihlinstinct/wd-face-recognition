@@ -10,6 +10,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
@@ -1328,6 +1329,89 @@ int main() {
         int st = 0;
         check(waitpid(kid, &st, 0) == kid && st == 0,
               "child exited cleanly");
+
+        // Legacy pid-file content (issue #105): a LIVE legacy holder
+        // (pid-file-era process, which takes no flock) refuses the new
+        // binary politely; stale content is truncated and ignored.
+        const std::string legacyp = tmp + "/legacy.lock";
+        const pid_t legacy = fork();
+        if (legacy == 0) {
+            prctl(PR_SET_NAME, "wdf_indexer", 0, 0, 0);
+            sleep(30);
+            _exit(0);
+        }
+        if (legacy < 0) {
+            check(false, "legacy holder forked");
+            return 1;  // never kill(-1) / waitpid(-1) below
+        }
+        // Wait for the child's prctl so the comm check sees wdf_*.
+        bool named = false;
+        for (int i = 0; i < 100 && !named; ++i) {
+            char pp[64], comm[32] = {0};
+            std::snprintf(pp, sizeof pp, "/proc/%d/comm", legacy);
+            const int cf = open(pp, O_RDONLY);
+            if (cf >= 0) { read(cf, comm, sizeof comm - 1); close(cf); }
+            named = std::strncmp(comm, "wdf_indexer", 11) == 0;
+            if (!named) usleep(10000);
+        }
+        check(named, "legacy holder carries its wdf_* name");
+        {
+            const int wf = open(legacyp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            check(wf >= 0 && dprintf(wf, "%d\n", legacy) > 0 && close(wf) == 0,
+                  "legacy pid file written");
+        }
+        {
+            wfi::InstanceLock ll;
+            check(!ll.acquire(legacyp, err) &&
+                      err.find("already running") != std::string::npos,
+                  "live legacy holder refuses the flock binary");
+        }
+        kill(legacy, SIGKILL);
+        check(waitpid(legacy, &st, 0) == legacy, "legacy holder reaped");
+        {
+            wfi::InstanceLock ll;
+            check(ll.acquire(legacyp, err),
+                  "stale legacy content truncated and ignored");
+            char b[8] = {0};
+            const int rf = open(legacyp.c_str(), O_RDONLY);
+            check(rf >= 0 && read(rf, b, sizeof b) == 0,
+                  "legacy content truncated on clean acquire");
+            close(rf);
+        }
+        // Comm check pins (reviewer): a live FOREIGN process named by
+        // the legacy PID must NOT block the acquire (pid reuse is not a
+        // legacy holder), and garbage non-numeric content is truncated
+        // and ignored.
+        const pid_t foreign = fork();
+        if (foreign == 0) { sleep(30); _exit(0); }  // comm: "wfi_test"
+        if (foreign < 0) {
+            check(false, "foreign process forked");
+            return 1;
+        }
+        const std::string foreignp = tmp + "/foreign.lock";
+        {
+            const int wf = open(foreignp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            check(wf >= 0 && dprintf(wf, "%d\n", foreign) > 0 && close(wf) == 0,
+                  "foreign pid file written");
+        }
+        {
+            wfi::InstanceLock fl;
+            check(fl.acquire(foreignp, err),
+                  "live foreign process at the legacy pid does not block");
+        }
+        kill(foreign, SIGKILL);
+        check(waitpid(foreign, &st, 0) == foreign, "foreign process reaped");
+        const std::string garbagep = tmp + "/garbage.lock";
+        {
+            const int wf = open(garbagep.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            check(wf >= 0 && write(wf, "not-a-pid\n", 10) == 10 && close(wf) == 0,
+                  "garbage lock written");
+        }
+        {
+            wfi::InstanceLock gl;
+            check(gl.acquire(garbagep, err),
+                  "garbage content truncated and ignored");
+        }
         close(to_child[1]);
         close(to_parent[0]);
         wfi::InstanceLock l5;
