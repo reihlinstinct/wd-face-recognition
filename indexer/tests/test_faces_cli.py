@@ -181,7 +181,7 @@ r = run("gc", "--config", conf, "--limit", "3")
 check(r.returncode == 2 and "not valid for gc" in r.stderr,
       "gc refuses --limit")
 r = run("gc", "--config", conf)
-check(r.returncode == 0 and r.stdout.strip() == "removed=1 kept=1",
+check(r.returncode == 0 and r.stdout.strip() == "removed=1 kept=1 failed=0",
       "gc counts line")
 check(not os.path.exists(os.path.join(crops, "orphan.jpg")),
       "orphan crop removed")

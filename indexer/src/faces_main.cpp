@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
-#include <cstring>
 #include <dirent.h>
 #include <set>
 #include <string>
@@ -191,7 +190,7 @@ int main(int argc, char** argv) {
                          std::strerror(errno));
             return 1;
         }
-        long removed = 0, kept = 0;
+        long removed = 0, kept = 0, failed = 0;
         struct dirent* de;
         while ((de = readdir(d)) != nullptr) {
             const std::string name = de->d_name;
@@ -205,11 +204,17 @@ int main(int argc, char** argv) {
                 ++kept;
                 continue;
             }
-            if (unlink(full.c_str()) == 0) ++removed;
+            if (unlink(full.c_str()) == 0) {
+                ++removed;
+            } else {
+                ++failed;  // counted and named, never silent (review #99)
+                std::fprintf(stderr, "gc: cannot remove %s: %s\n",
+                             full.c_str(), std::strerror(errno));
+            }
         }
         closedir(d);
-        std::printf("removed=%ld kept=%ld\n", removed, kept);
-        return 0;
+        std::printf("removed=%ld kept=%ld failed=%ld\n", removed, kept, failed);
+        return failed > 0 ? 1 : 0;
     }
 
     const std::string models = models_override.empty() ? cfg.models_dir : models_override;

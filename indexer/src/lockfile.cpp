@@ -58,7 +58,9 @@ void sweep_stale_temps(const std::string& path) {
         const char* tail = name.c_str() + prefix.size();
         char* end = nullptr;
         const long pid = std::strtol(tail, &end, 10);
-        if (end == tail || *end != '\0' || pid <= 0 || pid_alive(pid)) continue;
+        // Same pid_t-range cap as read_pid.
+        if (end == tail || *end != '\0' || pid <= 0 || pid > 4194304 ||
+            pid_alive(pid)) continue;
         unlink((dir + "/" + name).c_str());
     }
     closedir(d);
