@@ -126,6 +126,12 @@ check(wdf_rename_request_error('1', "Dan\x1f") !== '', 'C0 control in name refus
 check(strpos(wdf_rename_request_error('1', "a\x00"), 'control') !== false,
     'control-char message is specific');
 check(wdf_post_id("1\x00") === null, 'NUL in id rejected by the digit gate');
+
+// Bidi marks are legitimate in Hebrew names (review #89 follow-up):
+// LRM/RLM (U+200E/U+200F) are format chars, not control chars, and
+// must PASS validation.
+check(wdf_rename_request_error('1', "‎דנה‏") === '',
+    'LRM/RLM in a Hebrew name passes');
 // The raw input is checked BEFORE trimming (review #89): a trailing
 // tab or newline is refused, never silently stripped and accepted.
 check(wdf_rename_request_error('1', "Dana\t") !== '', 'trailing tab refused');
