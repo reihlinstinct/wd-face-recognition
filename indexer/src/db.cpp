@@ -96,6 +96,24 @@ bool Db::open(const std::string& path, std::string& err) {
 
 void Db::set_busy_timeout(int ms) { sqlite3_busy_timeout(db_, ms); }
 
+bool Db::all_crop_paths(std::set<std::string>& out, std::string& err) {
+    out.clear();
+    if (!flush()) {
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db_, "SELECT crop_path FROM faces",
+                           -1, &st, nullptr) != SQLITE_OK) {
+        err = sqlite3_errmsg(db_);
+        return false;
+    }
+    while (sqlite3_step(st) == SQLITE_ROW)
+        out.insert((const char*)sqlite3_column_text(st, 0));
+    sqlite3_finalize(st);
+    return true;
+}
+
 bool Db::delete_photo(long id, std::vector<std::string>& crops,
                       std::string& err) {
     crops.clear();

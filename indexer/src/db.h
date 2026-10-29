@@ -5,6 +5,7 @@
 #include <sqlite3.h>
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -89,6 +90,9 @@ public:
     // Face rows stored for one photo (-1 on error). Used by tests and the
     // people page.
     long face_count(long photo_id);
+    // Every crop_path the faces table references (for orphan-crop GC,
+    // issue #47).
+    bool all_crop_paths(std::set<std::string>& out, std::string& err);
     // Deletes one photo row; its faces cascade via foreign_keys=ON
     // (issue #48). The deleted faces' crop paths come back in crops for
     // the caller to unlink after the commit (same contract as

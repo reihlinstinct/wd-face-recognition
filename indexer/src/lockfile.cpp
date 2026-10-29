@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -40,6 +41,29 @@ bool pid_alive(long pid) {
     return errno == EPERM;
 }
 
+// A crash between the temp create and the link leaves
+// "<lock>.tmp.<pid>" behind (reviewer #97): sweep the dead-PID ones
+// before acquiring. Live owners' temps stay untouched.
+void sweep_stale_temps(const std::string& path) {
+    const size_t slash = path.rfind('/');
+    const std::string dir = slash == std::string::npos ? "." : path.substr(0, slash);
+    const std::string base = slash == std::string::npos ? path : path.substr(slash + 1);
+    const std::string prefix = base + ".tmp.";
+    DIR* d = opendir(dir.c_str());
+    if (d == nullptr) return;
+    struct dirent* de;
+    while ((de = readdir(d)) != nullptr) {
+        const std::string name = de->d_name;
+        if (name.rfind(prefix, 0) != 0) continue;
+        const char* tail = name.c_str() + prefix.size();
+        char* end = nullptr;
+        const long pid = std::strtol(tail, &end, 10);
+        if (end == tail || *end != '\0' || pid <= 0 || pid_alive(pid)) continue;
+        unlink((dir + "/" + name).c_str());
+    }
+    closedir(d);
+}
+
 }  // namespace
 
 InstanceLock::~InstanceLock() {
@@ -61,11 +85,16 @@ bool InstanceLock::acquire(const std::string& path, std::string& err) {
               std::strerror(errno);
         return false;
     }
-    if (write(tfd, buf, (size_t)n) != n || close(tfd) != 0) {
+    // No short-circuit here (reviewer #97): a failed write must still
+    // close the descriptor.
+    const bool wrote = write(tfd, buf, (size_t)n) == n;
+    const bool closed = close(tfd) == 0;
+    if (!wrote || !closed) {
         unlink(tmp.c_str());
         err = "cannot write the lockfile " + path;
         return false;
     }
+    sweep_stale_temps(path);
     for (int attempt = 0; attempt < 2; ++attempt) {
         if (link(tmp.c_str(), path.c_str()) == 0) {
             unlink(tmp.c_str());

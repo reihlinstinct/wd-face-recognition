@@ -168,6 +168,28 @@ r = run("cluster", "--config", conf)
 check(r.returncode == 0 and r.stdout.strip() ==
       "faces=1 people=1 singletons=1", "cluster counts line")
 
+# gc (issue #47): orphan crop files are removed, referenced ones stay,
+# directories are untouched, and the counts line reports both.
+crops = os.path.join(data, "crops")
+os.mkdir(crops)
+with open(os.path.join(crops, "seed.jpg"), "w") as f:
+    f.write("x")  # referenced by the merged face above
+with open(os.path.join(crops, "orphan.jpg"), "w") as f:
+    f.write("x")
+os.mkdir(os.path.join(crops, "keepdir"))
+r = run("gc", "--config", conf, "--limit", "3")
+check(r.returncode == 2 and "not valid for gc" in r.stderr,
+      "gc refuses --limit")
+r = run("gc", "--config", conf)
+check(r.returncode == 0 and r.stdout.strip() == "removed=1 kept=1",
+      "gc counts line")
+check(not os.path.exists(os.path.join(crops, "orphan.jpg")),
+      "orphan crop removed")
+check(os.path.exists(os.path.join(crops, "seed.jpg")),
+      "referenced crop kept")
+check(os.path.isdir(os.path.join(crops, "keepdir")),
+      "directory untouched by gc")
+
 # Instance lock (issue #46): with a live PID in data_dir/wdf.lock, a
 # mutating command exits politely while the read commands stay usable.
 lock_path = os.path.join(data, "wdf.lock")
