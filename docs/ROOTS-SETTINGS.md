@@ -77,12 +77,15 @@ fresh install ships with no roots (privacy first, #56), and erroring
 on the shipped default would brick every new install's first run.
 Today `load_config` FAILS on an empty list ("config has no roots=")
 and the indexer/`wdf_faces` entry points exit nonzero - the
-implementation PR changes that: `load_config` accepts zero roots,
-`wdf_indexer` prints "no roots configured - nothing to scan" and exits
-0, and `wdf_faces` mutating commands report nothing to do and exit 0
-(read commands are unaffected). A contract test pins this end to end:
-empty `roots=` -> both binaries succeed, the DB gains no photos, and
-stderr carries no error.
+implementation PR changes that. The matrix (CodeRabbit #103): only the
+WALK is the no-op; DB work keeps running. `load_config` accepts zero
+roots; `wdf_indexer` prints "no roots configured - nothing to scan",
+skips walking, exits 0 - but the sweep below still runs; `wdf_faces`
+DB operations (`process`, `cluster`, `gc`, people rename/merge) keep
+operating on the existing index; read commands are unaffected. A
+contract test pins this end to end on a fresh install: empty `roots=`
+-> both binaries succeed, the DB gains no photos, stderr carries no
+error.
 
 ## Root removal semantics
 
@@ -96,9 +99,27 @@ stored in `photos` that is no longer configured. Such a sweep needs no
 walk: nothing under that root was observed in this job, so every one
 of its photos is marked `missing`, its faces stop feeding identity
 rebuilds, and re-adding the root later re-queues them through the
-normal `missing -> changed` path. Coverage: a two-scan test (scan with
-the root, rescan without it) asserts the photos flip to `missing` and
-a third scan with the root re-added restores them.
+normal `missing -> changed` path.
+
+One job generation per RUN, shared by every configured root and by the
+unconfigured-root sweeps (CodeRabbit #103): `sweep_missing` marks
+photos whose `last_seen_job` differs from the sweeping job, so
+per-root job ids would mark photos observed earlier in the SAME run as
+missing. The zero-root corner follows from the same rule: a run with
+no configured roots still opens one job and sweeps every stored root
+under it - clearing ALL roots flips every indexed photo to `missing`
+(reversible; re-adding a root restores it).
+
+## Missing photos and identity data
+
+A photo in `missing` state must be excluded consistently from
+everything identity-shaped: embedding loads, cluster input, people
+counts, person details (or its faces detached). The implementation PR
+audits each consumer query for the state filter. The root-removal test
+verifies the full cycle through `process`/`cluster`, not just the
+state column: scan with the root, rescan without it (photos `missing`,
+their faces out of clustering and people), re-add the root (photos and
+faces back).
 
 ## Apply-time semantics
 
@@ -127,5 +148,7 @@ sees either the old config or the new one, never a mix.
   canonicalization (incl. through a share-level symlink).
 - Empty-roots contract test: both binaries succeed on zero roots.
 - Root removal: photos under a removed root flip to `missing` on the
-  next scan and recover when the root is re-added.
+  next scan, are excluded from `process`/`cluster` and people counts
+  while missing, and recover when the root is re-added; one shared job
+  generation per run is pinned (no observed photo is swept).
 - `DEVICE-TEST.md` gains the roots-editing step.
