@@ -182,7 +182,9 @@ int main(int argc, char** argv) {
         const std::string dir = cfg.data_dir + "/crops";
         DIR* d = opendir(dir.c_str());
         if (d == nullptr && errno == ENOENT) {
-            std::printf("removed=0 kept=0\n");  // no crops yet: nothing to do
+            // No crops yet: nothing to do. Same counts shape as a real
+            // sweep (CodeRabbit #99).
+            std::printf("removed=0 kept=0 failed=0\n");
             return 0;
         }
         if (d == nullptr) {
@@ -192,7 +194,9 @@ int main(int argc, char** argv) {
         }
         long removed = 0, kept = 0, failed = 0;
         struct dirent* de;
+        errno = 0;
         while ((de = readdir(d)) != nullptr) {
+            errno = 0;
             const std::string name = de->d_name;
             if (name == "." || name == ".." ||
                 name.find('/') != std::string::npos) continue;
@@ -212,7 +216,15 @@ int main(int argc, char** argv) {
                              full.c_str(), std::strerror(errno));
             }
         }
+        const int read_err = errno;  // readdir ended: 0 = clean EOF
         closedir(d);
+        if (read_err != 0) {
+            // A partial listing treated as complete would leave orphans
+            // behind silently (CodeRabbit #99).
+            std::fprintf(stderr, "gc: error reading %s: %s\n", dir.c_str(),
+                         std::strerror(read_err));
+            return 1;
+        }
         std::printf("removed=%ld kept=%ld failed=%ld\n", removed, kept, failed);
         return failed > 0 ? 1 : 0;
     }

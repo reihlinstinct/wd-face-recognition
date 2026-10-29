@@ -189,6 +189,12 @@ check(os.path.exists(os.path.join(crops, "seed.jpg")),
       "referenced crop kept")
 check(os.path.isdir(os.path.join(crops, "keepdir")),
       "directory untouched by gc")
+import shutil
+shutil.rmtree(crops)
+r = run("gc", "--config", conf)
+check(r.returncode == 0 and r.stdout.strip() == "removed=0 kept=0 failed=0",
+      "absent crops dir reports the full counts shape")
+os.mkdir(crops)
 
 # Instance lock (issue #46): with a live PID in data_dir/wdf.lock, a
 # mutating command exits politely while the read commands stay usable.

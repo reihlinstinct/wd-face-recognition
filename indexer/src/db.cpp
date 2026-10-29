@@ -108,8 +108,18 @@ bool Db::all_crop_paths(std::set<std::string>& out, std::string& err) {
         err = sqlite3_errmsg(db_);
         return false;
     }
-    while (sqlite3_step(st) == SQLITE_ROW)
+    // A mid-scan step failure must not hand gc a partial set: omitted
+    // references would look like orphans and lose referenced crops
+    // (CodeRabbit #99).
+    int src;
+    while ((src = sqlite3_step(st)) == SQLITE_ROW)
         out.insert((const char*)sqlite3_column_text(st, 0));
+    if (src != SQLITE_DONE) {
+        err = sqlite3_errmsg(db_);
+        out.clear();
+        sqlite3_finalize(st);
+        return false;
+    }
     sqlite3_finalize(st);
     return true;
 }
