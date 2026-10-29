@@ -82,10 +82,14 @@ WALK is the no-op; DB work keeps running. `load_config` accepts zero
 roots; `wdf_indexer` prints "no roots configured - nothing to scan",
 skips walking, exits 0 - but the sweep below still runs; `wdf_faces`
 DB operations (`process`, `cluster`, `gc`, people rename/merge) keep
-operating on the existing index; read commands are unaffected. A
-contract test pins this end to end on a fresh install: empty `roots=`
--> both binaries succeed, the DB gains no photos, stderr carries no
-error.
+operating on the existing index; read commands are unaffected. The
+contract test pins BOTH halves end to end (CodeRabbit #103): on a
+fresh install, empty `roots=` -> both binaries succeed, the DB gains
+no photos, stderr carries no error; and with a SEEDED index (a photo,
+a face, a person present), clearing roots still lets `process`,
+`cluster`, `gc`, people rename/merge and all read commands operate on
+the existing data - empty roots stops new scanning, it does not freeze
+the index.
 
 ## Root removal semantics
 
@@ -109,6 +113,19 @@ missing. The zero-root corner follows from the same rule: a run with
 no configured roots still opens one job and sweeps every stored root
 under it - clearing ALL roots flips every indexed photo to `missing`
 (reversible; re-adding a root restores it).
+
+Coverage gate on unconfigured sweeps (CodeRabbit #103): a configured
+root's sweep already runs only after a COMPLETE walk (a depth-capped
+or unreadable walk is INCOMPLETE and skips the sweep). The
+unconfigured-root analog is overlap: a stored root is swept only when
+NO configured root overlaps it (neither ancestor nor descendant, on
+canonicalized paths - the rule-9 relation). Removing `/shares/Photos`
+while `/shares/Photos/2020` stays configured must not sweep the stored
+`/shares/Photos` root: files beneath it are still observed under the
+surviving subroot, and an ungated sweep would mark observed photos
+`missing`. Regression test: index under `/shares/Photos`, narrow the
+config to `/shares/Photos/2020`, rescan - photos under `2020` stay
+`scanned`, the rest flip to `missing`.
 
 ## Missing photos and identity data
 
