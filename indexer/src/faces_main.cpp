@@ -9,6 +9,7 @@
 
 #include "config.h"
 #include "db.h"
+#include "lockfile.h"
 #include "people.h"
 #include "process.h"
 #include "sysres.h"
@@ -62,6 +63,14 @@ int main(int argc, char** argv) {
     // on a shared NAS (independent review #45).
     umask(0077);
     wfi::renice_self();
+    // Mutating runs take the instance lock (issue #46); the read-only
+    // people/person JSON commands stay lock-free so the pages still load
+    // while a scan or process runs.
+    wfi::InstanceLock lock;
+    if (!is_read && !lock.acquire(cfg.data_dir + "/wdf.lock", err)) {
+        std::fprintf(stderr, "%s\n", err.c_str());
+        return 1;
+    }
 
     // people/person/rename/merge serve the PHP pages (issue #50 PR 3c):
     // the stripped OS5 PHP has no sqlite extension, so the pages shell

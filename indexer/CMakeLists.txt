@@ -13,7 +13,7 @@ target_include_directories(sqlite3 PUBLIC third_party)
 
 set(WDF_PIPELINE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../pipeline/src)
 
-add_executable(wdf_indexer src/main.cpp src/config.cpp src/db.cpp src/walk.cpp)
+add_executable(wdf_indexer src/main.cpp src/config.cpp src/db.cpp src/walk.cpp src/lockfile.cpp)
 target_link_libraries(wdf_indexer PRIVATE sqlite3 pthread dl)
 
 # Face-processing daemon (issue #40 PR 2): needs ncnn + libjpeg, so it is
@@ -34,7 +34,7 @@ if(WDF_FACES)
     find_library(JPEG_LIBRARY NAMES jpeg REQUIRED)
     add_executable(wdf_faces
         src/faces_main.cpp src/process.cpp src/config.cpp src/db.cpp
-        src/cropreserve.cpp src/people.cpp
+        src/cropreserve.cpp src/people.cpp src/lockfile.cpp
         ${WDF_PIPELINE_DIR}/cluster.cpp
         ${WDF_PIPELINE_DIR}/align.cpp ${WDF_PIPELINE_DIR}/detect.cpp
         ${WDF_PIPELINE_DIR}/jpegio.cpp)
@@ -52,7 +52,7 @@ option(WDF_INDEXER_TESTS "Build the indexer unit tests" OFF)
 if(WDF_INDEXER_TESTS)
     enable_testing()
     add_executable(wfi_test tests/indexer_test.cpp src/config.cpp src/db.cpp src/walk.cpp src/cropreserve.cpp
-        src/people.cpp ${WDF_PIPELINE_DIR}/cluster.cpp)
+        src/people.cpp src/lockfile.cpp ${WDF_PIPELINE_DIR}/cluster.cpp)
     target_include_directories(wfi_test PRIVATE ${WDF_PIPELINE_DIR})
     target_link_libraries(wfi_test PRIVATE sqlite3 pthread dl)
     find_package(Python3 COMPONENTS Interpreter)
@@ -61,7 +61,7 @@ if(WDF_INDEXER_TESTS)
     # process stage, so no ncnn/libjpeg is needed.
     add_executable(wdf_faces_cli src/faces_main.cpp tests/process_stub.cpp
         src/config.cpp src/db.cpp src/walk.cpp src/cropreserve.cpp
-        src/people.cpp ${WDF_PIPELINE_DIR}/cluster.cpp)
+        src/people.cpp src/lockfile.cpp ${WDF_PIPELINE_DIR}/cluster.cpp)
     target_include_directories(wdf_faces_cli PRIVATE src ${WDF_PIPELINE_DIR})
     target_link_libraries(wdf_faces_cli PRIVATE sqlite3 pthread dl)
     if(Python3_Interpreter_FOUND)

@@ -11,6 +11,7 @@
 #include <set>
 #include <string>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
 #include <utime.h>
@@ -18,6 +19,7 @@
 
 #include "../src/config.h"
 #include "../src/cropreserve.h"
+#include "../src/lockfile.h"
 #include "../src/db.h"
 #include "../src/people.h"
 #include "../src/walk.h"
@@ -1196,6 +1198,42 @@ int main() {
         check(sqlite3_step(ist) == SQLITE_ROW, "idx_faces_photo exists");
         sqlite3_finalize(ist);
         sqlite3_close(raw5);
+    }
+
+    // Instance lock (issue #46): a second holder is refused politely, the
+    // lockfile leaves with its holder, and a stale lockfile (dead PID) is
+    // reclaimed with the new holder's PID written in.
+    {
+        const std::string lockp = tmp + "/wdf.lock";
+        {
+            wfi::InstanceLock l1;
+            check(l1.acquire(lockp, err), "first instance takes the lock");
+            wfi::InstanceLock l2;
+            check(!l2.acquire(lockp, err) &&
+                      err.find("already running") != std::string::npos,
+                  "second instance refused politely");
+        }
+        check(access(lockp.c_str(), F_OK) != 0,
+              "lockfile released with the holder");
+        // fork+wait gives a PID that is certainly dead afterwards.
+        const pid_t dead = fork();
+        if (dead == 0) _exit(0);
+        check(dead > 0 && waitpid(dead, nullptr, 0) == dead,
+              "dead pid available for the stale-lock test");
+        const std::string stale = std::to_string((long)dead) + "\n";
+        const int lfd = open(lockp.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+        check(lfd >= 0 && write(lfd, stale.c_str(), stale.size()) ==
+                                 (ssize_t)stale.size(),
+              "stale lockfile planted");
+        if (lfd >= 0) close(lfd);
+        wfi::InstanceLock l3;
+        check(l3.acquire(lockp, err), "stale lockfile reclaimed");
+        char buf[32] = {0};
+        const int rfd = open(lockp.c_str(), O_RDONLY);
+        check(rfd >= 0 && read(rfd, buf, sizeof(buf) - 1) > 0 &&
+                  std::strtol(buf, nullptr, 10) == (long)getpid(),
+              "reclaimed lock holds the new owner's pid");
+        if (rfd >= 0) close(rfd);
     }
 
     // JSON for the PHP pages (issue #50, PR 3c): escaping and shape.

@@ -10,6 +10,7 @@
 
 #include "config.h"
 #include "db.h"
+#include "lockfile.h"
 #include "sysres.h"
 #include "walk.h"
 
@@ -39,6 +40,12 @@ int main(int argc, char** argv) {
     // The index holds face data: never world-readable (review #45).
     umask(0077);
     wfi::renice_self();
+    // One indexer at a time (issue #46): a second scan exits politely.
+    wfi::InstanceLock lock;
+    if (!lock.acquire(cfg.data_dir + "/wdf.lock", err)) {
+        std::fprintf(stderr, "%s\n", err.c_str());
+        return 1;
+    }
     wfi::Db db;
     if (!db.open(cfg.data_dir + "/index.db", err)) {
         std::fprintf(stderr, "%s\n", err.c_str());
