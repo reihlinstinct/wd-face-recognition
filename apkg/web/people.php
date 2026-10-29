@@ -42,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = (string)($_POST['action'] ?? '');
         if ($action === 'rename') {
             $id = wdf_post_id((string)($_POST['id'] ?? ''));
-            $name = trim((string)($_POST['name'] ?? ''));
+            $name = wdf_name_trim((string)($_POST['name'] ?? ''));
             $renameErr = wdf_rename_request_error((string)($_POST['id'] ?? ''),
                 (string)($_POST['name'] ?? ''));
             if ($renameErr !== '') {

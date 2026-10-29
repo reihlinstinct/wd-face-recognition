@@ -107,6 +107,30 @@ check(wdf_rename_request_error('1', str_repeat('a', 128)) === '',
 check(wdf_rename_request_error('1', '  דנה  ') === '',
     'Hebrew name with padding passes');
 check(wdf_rename_request_error('1', 'Dana') === '', 'valid rename passes');
+
+// Unicode whitespace (issue #88): trim() alone leaves NBSP / U+2003.
+check(wdf_name_trim("\xc2\xa0") === '', 'NBSP-only trims to empty');
+check(wdf_name_trim("\xe2\x80\x83") === '', 'em-space-only trims to empty');
+check(wdf_rename_request_error('1', "\xc2\xa0") !== '',
+    'NBSP-only name refused');
+check(wdf_rename_request_error('1', "\xe2\x80\x83") !== '',
+    'U+2003-only name refused');
+check(wdf_rename_request_error('1', " \xc2\xa0Dana\xe2\x80\x83") === '',
+    'mixed ASCII + Unicode padding passes');
+
+// Control characters (issue #89): NUL would reach proc_open argv and
+// throw on PHP 8; the rest of the C0 range is refused with it. The id
+// is safe by construction (regex \\d{1,10}) - pinned explicitly.
+check(wdf_rename_request_error('1', "Dana\x00x") !== '', 'NUL in name refused');
+check(wdf_rename_request_error('1', "Dan\x1f") !== '', 'C0 control in name refused');
+check(strpos(wdf_rename_request_error('1', "a\x00"), 'control') !== false,
+    'control-char message is specific');
+check(wdf_post_id("1\x00") === null, 'NUL in id rejected by the digit gate');
+// The raw input is checked BEFORE trimming (review #89): a trailing
+// tab or newline is refused, never silently stripped and accepted.
+check(wdf_rename_request_error('1', "Dana\t") !== '', 'trailing tab refused');
+check(wdf_rename_request_error('1', "Dana\n") !== '', 'trailing newline refused');
+check(wdf_rename_request_error('1', "\tDana") !== '', 'leading tab refused');
 // The cap counts characters, not bytes (review #85). mbstring is
 // REQUIRED for these assertions - fail loudly if the CI php lacks it
 // rather than silently skipping the character-cap pin.

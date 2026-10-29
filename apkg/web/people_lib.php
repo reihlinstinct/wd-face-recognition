@@ -162,6 +162,16 @@ function wdf_post_id(string $raw): ?int
     return $id > 0 ? $id : null;
 }
 
+// Unicode-aware trim for names (issue #88): PHP trim() strips only
+// ASCII whitespace, so an NBSP-only "name" is non-empty after trim.
+// \s with the u flag covers Unicode whitespace, \p{Z} the separators.
+// Falls back to trim() when PCRE rejects the input (not valid UTF-8).
+function wdf_name_trim(string $raw): string
+{
+    $t = preg_replace('/^[\s\p{Z}]+|[\s\p{Z}]+$/u', '', $raw);
+    return $t === null ? trim($raw) : $t;
+}
+
 // Rename request gate (issue #84): distinct messages so the user can
 // tell a bad id from an empty name - the CLI refuses to clear a name,
 // so the page rejects it before the exec.
@@ -170,7 +180,14 @@ function wdf_rename_request_error(string $idRaw, string $nameRaw): string
     if (wdf_post_id($idRaw) === null) {
         return 'Bad rename request.';
     }
-    $name = trim($nameRaw);
+    // Control characters (issue #89) are checked on the RAW input,
+    // before trimming: a trailing tab must be refused, not silently
+    // stripped and accepted (review #89). A %00 name passes empty
+    // validation and PHP 8 proc_open THROWS on NUL in argv.
+    if (preg_match('/[\x00-\x1f]/', $nameRaw) === 1) {
+        return 'Names cannot contain control characters.';
+    }
+    $name = wdf_name_trim($nameRaw);
     if ($name === '') {
         return 'Enter a name for this person first.';
     }
