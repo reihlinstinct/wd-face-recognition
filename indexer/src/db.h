@@ -101,6 +101,9 @@ public:
                       std::string& err);
     // Tests only: shorten the lock wait so the busy path is exercisable.
     void set_busy_timeout(int ms);
+    // Tests only: fault injection (e.g. sqlite3_progress_handler) needs
+    // the live connection.
+    sqlite3* handle_for_test() { return db_; }
     // Atomically replaces a photo's face rows with the new set and marks
     // the photo 'scanned' - but only if the photo is still queued with the
     // exact size/mtime version the caller processed. A concurrent scan that

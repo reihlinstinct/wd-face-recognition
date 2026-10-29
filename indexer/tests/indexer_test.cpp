@@ -1200,6 +1200,43 @@ int main() {
         sqlite3_close(raw5);
     }
 
+    // all_crop_paths fault injection (review #99): an interrupted scan
+    // must fail and clear the set - a partial reference set handed to gc
+    // would delete still-referenced crops.
+    {
+        std::string tmp6 = tmp + "/gcfi";
+        std::string data6 = tmp6 + "/data";
+        mkdir(tmp6.c_str(), 0777);
+        mkdir(data6.c_str(), 0777);
+        wfi::Db db6;
+        check(db6.open(data6 + "/index.db", err), "gc-fi db opens");
+        long jobg = db6.begin_job(tmp6);
+        check(db6.observe(jobg, tmp6, tmp6 + "/g.jpg", 2, 1000, err) == 1,
+              "gc-fi photo queued");
+        std::vector<wfi::QueuedPhoto> gq;
+        check(db6.queued_photos(10, gq, err) && gq.size() == 1,
+              "gc-fi queue readable");
+        wfi::FaceRow frg;
+        frg.bbox = "0,0,1,1";
+        frg.embedding = {1.0f, 0.0f};
+        frg.crop_path = "crops/g_t1_f0.jpg";
+        std::vector<std::string> oldg;
+        bool conflictf = true;
+        check(db6.replace_faces(gq[0].id, gq[0].size, gq[0].mtime, {frg},
+                                oldg, conflictf, err) && !conflictf,
+              "gc-fi face committed");
+        std::set<std::string> paths;
+        check(db6.all_crop_paths(paths, err) && paths.size() == 1,
+              "crop paths readable without faults");
+        // Interrupt every VDBE step: the scan cannot finish.
+        sqlite3_progress_handler(db6.handle_for_test(), 1,
+                                 [](void*) -> int { return 1; }, nullptr);
+        paths.insert("stale");
+        check(!db6.all_crop_paths(paths, err) && paths.empty(),
+              "interrupted crop-path scan fails with an empty set");
+        sqlite3_progress_handler(db6.handle_for_test(), 0, nullptr, nullptr);
+    }
+
     // Instance lock (issues #46, #98): flock semantics - a second holder
     // is refused politely, the lock frees when the holder's descriptor
     // closes (destructor or process death; no stale state to reclaim).
