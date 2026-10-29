@@ -36,6 +36,8 @@ build against an irreplaceable photo library as an acceptance shortcut.
 
 ## Local development checks
 
+Every workflow ends with a `Run summary` job that writes a summary to the top of the run page: which jobs ran, their result and duration, what was skipped and why, the commits and files the run changed, and which checks cover those changes (`.github/ci-coverage-map.json` declares the coverage; files matching no mapping are flagged). The script is `scripts/ci/run_summary.py`.
+
 Run from the repository root. Python 3.11+ and a C++17 compiler are required for
 this subset. Use a virtual environment for the Python development tools:
 
