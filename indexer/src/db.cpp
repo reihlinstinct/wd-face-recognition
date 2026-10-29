@@ -247,9 +247,11 @@ int Db::observe(long job_id, const std::string& root, const std::string& path,
         return -1;
     }
 
-    int outcome;  // 0 skipped, 1 added, 2 changed
+    int outcome;  // 0 skipped, 1 added, 2 changed, 3 restored
     if (!existed) {
         outcome = 1;
+    } else if (old_state == "missing" && old_size == size && old_mtime == mtime) {
+        outcome = 3;
     } else if (old_size != size || old_mtime != mtime || old_state == "missing") {
         outcome = 2;
     } else {
@@ -260,6 +262,29 @@ int Db::observe(long job_id, const std::string& root, const std::string& path,
     bool ok;
     if (outcome == 0) {
         const char* sql = "UPDATE photos SET last_seen_job = ? WHERE path = ?";
+        ok = sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) == SQLITE_OK;
+        if (ok) {
+            sqlite3_bind_int64(st, 1, job_id);
+            sqlite3_bind_text(st, 2, path.c_str(), -1, SQLITE_TRANSIENT);
+        }
+    } else if (outcome == 3) {
+        // Back from missing with identical size+mtime: the file is the
+        // same one that was indexed, so its processed face rows (and
+        // their cluster memberships) are still valid. Restore WITHOUT
+        // re-queueing (reviewer + CodeRabbit #112): re-queueing runs
+        // replace_faces, which deletes and re-inserts face rows with
+        // cluster_id NULL, and the next rebuild's overlap claim - keyed
+        // by face row id - would no longer find the named cluster's
+        // faces: the person goes anonymous. scanned_at / fail_reason
+        // recover the pre-missing state: never processed -> queued
+        // (nothing was lost), processed -> scanned, failed -> failed.
+        const char* sql =
+            "UPDATE photos SET state = CASE"
+            "   WHEN scanned_at IS NULL THEN 'queued'"
+            "   WHEN fail_reason IS NOT NULL THEN 'failed'"
+            "   ELSE 'scanned' END,"
+            " last_seen_job = ?"
+            " WHERE path = ?";
         ok = sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) == SQLITE_OK;
         if (ok) {
             sqlite3_bind_int64(st, 1, job_id);
@@ -313,6 +338,33 @@ long Db::sweep_missing(long job_id, const std::string& root) {
     if (ok) n = (long)sqlite3_changes(db_);
     sqlite3_finalize(st);
     return ok ? n : -1;  // CodeRabbit #41: a failed step is not "0 swept"
+}
+
+bool Db::distinct_roots(std::vector<std::string>& out, std::string& err) {
+    out.clear();
+    if (!flush()) {
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db_, "SELECT DISTINCT root FROM photos ORDER BY root",
+                           -1, &st, nullptr) != SQLITE_OK) {
+        err = sqlite3_errmsg(db_);
+        return false;
+    }
+    while (true) {
+        const int rc = sqlite3_step(st);
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) {
+            err = sqlite3_errmsg(db_);
+            out.clear();
+            sqlite3_finalize(st);
+            return false;
+        }
+        out.push_back((const char*)sqlite3_column_text(st, 0));
+    }
+    sqlite3_finalize(st);
+    return true;
 }
 
 bool Db::finish_job(long job_id, const ScanCounts& c) {
@@ -519,7 +571,12 @@ bool Db::all_face_embeddings(std::vector<ClusterFace>& out, std::string& err) {
         return false;
     }
     sqlite3_stmt* st = nullptr;
-    if (sqlite3_prepare_v2(db_, "SELECT id, photo_id, embedding FROM faces ORDER BY id",
+    // Faces of missing photos are out of identity rebuilds (root removal,
+    // #102): the rows stay (reversible), the cluster input skips them.
+    if (sqlite3_prepare_v2(db_,
+            "SELECT f.id, f.photo_id, f.embedding FROM faces f"
+            " JOIN photos p ON p.id = f.photo_id"
+            " WHERE p.state != 'missing' ORDER BY f.id",
                            -1, &st, nullptr) != SQLITE_OK) {
         err = sqlite3_errmsg(db_);
         return false;
@@ -670,15 +727,44 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
         for (const long cid : group_cluster)
             if (cid != 0) reused.insert(cid);
         // Clear assignments: faces no group covers end at NULL rather
-        // than pointing at a cluster they no longer belong to.
-        if (sqlite3_exec(db_, "UPDATE faces SET cluster_id = NULL", nullptr,
-                         nullptr, nullptr) != SQLITE_OK)
+        // than pointing at a cluster they no longer belong to. Faces on
+        // MISSING photos keep their membership (root removal, #102):
+        // excluded from the cluster input, they must not be detached -
+        // the stored cluster_id is what lets a restored root rejoin the
+        // same person below (the face_cluster map reads them).
+        if (sqlite3_exec(db_,
+                "UPDATE faces SET cluster_id = NULL WHERE photo_id IN"
+                " (SELECT id FROM photos WHERE state != 'missing')",
+                nullptr, nullptr, nullptr) != SQLITE_OK)
             break;
-        // Drop live clusters no group kept.
+        // Drop live clusters no group kept - EXCEPT a cluster whose
+        // remaining faces sit on missing photos (root removal, #102):
+        // exclusion from the cluster input must not dissolve the person;
+        // the name and membership survive so a restored root rejoins the
+        // same identity instead of forming a new anonymous cluster.
         {
+            std::set<long> protected_ids;
+            {
+                sqlite3_stmt* pst = nullptr;
+                if (sqlite3_prepare_v2(db_,
+                        "SELECT DISTINCT f.cluster_id FROM faces f"
+                        " JOIN photos p ON p.id = f.photo_id"
+                        " WHERE p.state = 'missing' AND f.cluster_id IS NOT NULL",
+                        -1, &pst, nullptr) != SQLITE_OK) {
+                    step_ok = false;
+                } else {
+                    int rc;
+                    while ((rc = sqlite3_step(pst)) == SQLITE_ROW)
+                        protected_ids.insert(sqlite3_column_int64(pst, 0));
+                    if (rc != SQLITE_DONE) step_ok = false;
+                    sqlite3_finalize(pst);
+                }
+            }
             std::vector<long> live_ids;
             sqlite3_stmt* st = nullptr;
-            if (sqlite3_prepare_v2(db_,
+            if (!step_ok) {
+                // keep the failure; skip the read
+            } else if (sqlite3_prepare_v2(db_,
                     "SELECT id FROM clusters WHERE merged_into IS NULL",
                     -1, &st, nullptr) != SQLITE_OK) {
                 step_ok = false;
@@ -697,6 +783,7 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
             if (step_ok) {
                 for (const long cid : live_ids) {
                     if (reused.count(cid) != 0) continue;
+                    if (protected_ids.count(cid) != 0) continue;
                     sqlite3_bind_int64(del, 1, cid);
                     if (sqlite3_step(del) != SQLITE_DONE) {
                         step_ok = false;
@@ -771,10 +858,15 @@ bool Db::people_list(std::vector<PersonSummary>& out, std::string& err) {
     }
     sqlite3_stmt* st = nullptr;
     const char* sql =
+        // Faces of missing photos count for nothing identity-shaped (root
+        // removal, #102); the rows stay, so a restored root rejoins.
         "SELECT c.id, COALESCE(c.name, ''),"
-        " (SELECT count(*) FROM faces f WHERE f.cluster_id = c.id),"
+        " (SELECT count(*) FROM faces f JOIN photos fp ON fp.id = f.photo_id"
+        "  WHERE f.cluster_id = c.id AND fp.state != 'missing'),"
         " COALESCE((SELECT f2.crop_path FROM faces f2"
-        "          WHERE f2.cluster_id = c.id ORDER BY f2.id LIMIT 1), '')"
+        "          JOIN photos fp2 ON fp2.id = f2.photo_id"
+        "          WHERE f2.cluster_id = c.id AND fp2.state != 'missing'"
+        "          ORDER BY f2.id LIMIT 1), '')"
         " FROM clusters c WHERE c.merged_into IS NULL"
         " ORDER BY 3 DESC, c.id";
     if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
@@ -812,7 +904,8 @@ bool Db::person_faces(long cluster_id, std::vector<PersonFace>& out,
     const char* sql =
         "SELECT f.id, f.bbox, f.crop_path, p.path"
         " FROM faces f JOIN photos p ON p.id = f.photo_id"
-        " WHERE f.cluster_id = ? ORDER BY p.path, f.id";
+        " WHERE f.cluster_id = ? AND p.state != 'missing'"
+        " ORDER BY p.path, f.id";
     if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
         err = sqlite3_errmsg(db_);
         return false;

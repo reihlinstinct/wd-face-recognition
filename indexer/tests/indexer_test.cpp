@@ -71,11 +71,62 @@ int main() {
     check(wfi::load_config(tmp + "/noroots.conf", ecfg, err), "absent roots= loads");
     check(ecfg.roots.empty(), "absent roots= yields no roots");
 
+    // canonical_root + roots_overlap: the rule-9 relation behind the
+    // unconfigured-sweep gate (root removal, #102). Nonexistent paths
+    // exercise the lexical fallback; tmp exists, so realpath answers.
+    check(wfi::canonical_root("/nonexistent-x//y/./z") == "/nonexistent-x/y/z",
+          "lexical cleanup collapses slashes and dot");
+    check(wfi::canonical_root("/nonexistent-x/y/../z") == "/nonexistent-x/z",
+          "lexical cleanup resolves dotdot");
+    check(wfi::canonical_root("/nonexistent-x/y/") == "/nonexistent-x/y",
+          "trailing slash stripped");
+    check(wfi::canonical_root(tmp + "/sub/../") == tmp,
+          "existing path canonicalized by realpath");
+    check(wfi::roots_overlap("/a", "/a/b"), "ancestor overlaps");
+    check(wfi::roots_overlap("/a/b", "/a"), "descendant overlaps");
+    check(wfi::roots_overlap("/a", "/a"), "equal overlaps");
+    check(wfi::roots_overlap("/", "/a"), "filesystem root overlaps all");
+    check(!wfi::roots_overlap("/a/b", "/a/bc"),
+          "shared prefix without a segment boundary is not an overlap");
+    check(!wfi::roots_overlap("/a", "/b"), "unrelated roots do not overlap");
+    // Longest-existing-prefix resolution (CodeRabbit #112 major 1): a
+    // missing tail under a SYMLINKED prefix resolves through the link, so
+    // an unmounted child and an existing parent compare in one form.
+    check(mkdir((tmp + "/storage").c_str(), 0700) == 0, "storage dir");
+    check(symlink((tmp + "/storage").c_str(), (tmp + "/link").c_str()) == 0,
+          "symlinked prefix created");
+    check(wfi::canonical_root(tmp + "/link/sub/missing") ==
+              tmp + "/storage/sub/missing",
+          "missing tail resolves through the symlinked prefix");
+    check(wfi::roots_overlap(wfi::canonical_root(tmp + "/link/sub/missing"),
+                             wfi::canonical_root(tmp + "/storage/sub")),
+          "unmounted child still overlaps the resolved parent");
+    // ".." resolves in KERNEL order - against the RESOLVED parent, not
+    // lexically (CodeRabbit #112 major 3): link2 -> storage/inner means
+    // link2/../sibling is storage/sibling, never tmp/sibling. The UI
+    // rejects ".." but a hand-edited wfi.conf can carry it.
+    check(mkdir((tmp + "/storage/inner").c_str(), 0700) == 0, "inner dir");
+    check(mkdir((tmp + "/storage/sibling").c_str(), 0700) == 0, "sibling dir");
+    check(symlink((tmp + "/storage/inner").c_str(),
+                  (tmp + "/link2").c_str()) == 0, "second symlink created");
+    check(wfi::canonical_root(tmp + "/link2/../sibling/missing") ==
+              tmp + "/storage/sibling/missing",
+          "dotdot resolves through the symlinked parent");
+    check(wfi::roots_overlap(wfi::canonical_root(tmp + "/link2/../sibling/missing"),
+                             wfi::canonical_root(tmp + "/storage/sibling")),
+          "dotdot canonical forms overlap correctly");
+
     // First scan: two JPEGs queued (txt ignored).
     long job1 = db.begin_job(root);
     wfi::ScanCounts c1;
     check(wfi::scan_root(db, job1, root, 8, c1, err), "first scan runs");
     db.sweep_missing(job1, root);
+    {
+        std::vector<std::string> stored;
+        check(db.distinct_roots(stored, err), "distinct_roots reads");
+        check(stored.size() == 1 && stored[0] == root,
+              "distinct_roots returns the scanned root");
+    }
     db.finish_job(job1, c1);
     check(c1.scanned == 2 && c1.added == 2 && c1.skipped == 0 && c1.changed == 0,
           "first scan queues all JPEGs");
@@ -99,7 +150,10 @@ int main() {
     db.sweep_missing(job3, root);
     check(c3.changed == 1 && c3.skipped == 1, "mtime change re-queues exactly one");
 
-    // Delete one: marked missing. Restore: re-queued.
+    // Delete one: marked missing. A byte-identical return restores
+    // WITHOUT re-queueing (reviewer #112); a changed return re-queues.
+    struct stat b4;
+    stat((root + "/sub/b.jpg").c_str(), &b4);
     unlink((root + "/sub/b.jpg").c_str());
     long job4 = db.begin_job(root);
     wfi::ScanCounts c4;
@@ -107,11 +161,20 @@ int main() {
     long miss4 = db.sweep_missing(job4, root);
     check(miss4 == 1, "deleted photo marked missing");
     write_file(root + "/sub/b.jpg", "bbbb");
+    struct utimbuf btb { b4.st_atime, b4.st_mtime };
+    utime((root + "/sub/b.jpg").c_str(), &btb);  // same bytes, same mtime
     long job5 = db.begin_job(root);
     wfi::ScanCounts c5;
     check(wfi::scan_root(db, job5, root, 8, c5, err), "fifth scan runs");
     db.sweep_missing(job5, root);
-    check(c5.changed == 1 || c5.added == 1, "reappeared photo re-queued");
+    check(c5.restored == 1 && c5.changed == 0 && c5.added == 0,
+          "unchanged return restores without re-queue");
+    write_file(root + "/sub/b.jpg", "bbbb!");  // new size, new mtime
+    long jobrb = db.begin_job(root);
+    wfi::ScanCounts crb;
+    check(wfi::scan_root(db, jobrb, root, 8, crb, err), "changed-return scan runs");
+    db.sweep_missing(jobrb, root);
+    check(crb.changed == 1 && crb.restored == 0, "changed return re-queues");
 
     // Depth cap: a photo deeper than max-depth is not seen.
     mkdir((root + "/d1").c_str(), 0777);
@@ -638,6 +701,167 @@ int main() {
         check(db.people_list(pl, err) && pl.size() == 2 && pl[0].name == "Ima",
               "final state: one named person");
         first_id = pl[0].id;
+    }
+
+    // Restore keeps identity (reviewer + CodeRabbit #112), driving the
+    // REAL lifecycle on an isolated index: scan (observe) -> process
+    // (replace_faces) -> recluster -> name -> sweep missing -> restore
+    // scan -> pipeline pass -> recluster. A file back from missing with
+    // identical size+mtime restores WITHOUT re-queueing: re-queueing
+    // would re-run replace_faces, whose fresh face rows carry
+    // cluster_id NULL, and the next rebuild's overlap claim - keyed by
+    // face row id - would find no face pointing at Alice's cluster:
+    // she goes anonymous. Isolated DB so the rebuilds cannot disturb
+    // the shared fixtures above.
+    {
+        const std::string rdata = tmp + "/rdata";
+        const std::string rroot = tmp + "/rroot";
+        check(mkdir(rdata.c_str(), 0700) == 0, "lifecycle data dir");
+        check(mkdir(rroot.c_str(), 0700) == 0, "lifecycle root dir");
+        wfi::Db rdb;
+        check(rdb.open(rdata + "/index.db", err), "lifecycle db opens");
+
+        write_file(rroot + "/alice.jpg", "alice-bytes");
+        struct stat ast;
+        check(stat((rroot + "/alice.jpg").c_str(), &ast) == 0, "alice stat");
+        long joba = rdb.begin_job(rroot);
+        check(rdb.observe(joba, rroot, rroot + "/alice.jpg",
+                          (int64_t)ast.st_size, (int64_t)ast.st_mtime, err) == 1,
+              "alice queued by the scan");
+        check(rdb.flush(), "alice batch committed");
+        std::vector<wfi::QueuedPhoto> aq;
+        check(rdb.queued_photos(100, aq, err), "alice queue readable");
+        check(aq.size() == 1, "alice alone in the queue");
+        wfi::FaceRow fr;
+        fr.bbox = "0,0,1,1";
+        fr.embedding = {0.7f, 1.7f};
+        fr.crop_path = "crops/alice_f0.jpg";
+        std::vector<std::string> oldc;
+        bool conflict = true;
+        check(rdb.replace_faces(aq[0].id, aq[0].size, aq[0].mtime, {fr}, oldc,
+                                conflict, err) && !conflict,
+              "alice processed through replace_faces");
+        wfi::ClusterCounts cc;
+        check(wfi::recluster(rdb, 0.5, cc, err) && cc.people == 1,
+              "alice clustered");
+        std::vector<wfi::PersonSummary> pl;
+        check(rdb.people_list(pl, err) && pl.size() == 1, "alice listed");
+        const long alice_cid = pl[0].id;
+        check(rdb.rename_cluster(alice_cid, "Alice", err), "alice named Alice");
+
+        // The root's file vanishes: swept missing, faces keep membership.
+        check(unlink((rroot + "/alice.jpg").c_str()) == 0, "alice unlinked");
+        long jobb = rdb.begin_job(rroot);
+        wfi::ScanCounts cb;
+        check(wfi::scan_root(rdb, jobb, rroot, 8, cb, err), "post-delete walk");
+        check(rdb.sweep_missing(jobb, rroot) == 1, "alice swept missing");
+
+        // Same bytes come back with the same mtime: restored, NOT
+        // re-queued - the queue drain below is the pipeline pass that
+        // follows every scan, and it must find NOTHING to redo.
+        write_file(rroot + "/alice.jpg", "alice-bytes");
+        struct utimbuf tb;
+        tb.actime = ast.st_atime;
+        tb.modtime = ast.st_mtime;
+        check(utime((rroot + "/alice.jpg").c_str(), &tb) == 0,
+              "alice mtime restored");
+        long jobc = rdb.begin_job(rroot);
+        wfi::ScanCounts ccnt;
+        check(wfi::scan_root(rdb, jobc, rroot, 8, ccnt, err), "restore walk");
+        check(ccnt.restored == 1 && ccnt.changed == 0 && ccnt.added == 0,
+              "unchanged return restores without re-queue (mutant: changed)");
+        check(rdb.queued_photos(100, aq, err), "post-restore queue readable");
+        for (const auto& qq : aq) {
+            std::vector<std::string> oc;
+            bool cf2 = true;
+            check(rdb.replace_faces(qq.id, qq.size, qq.mtime, {fr}, oc, cf2,
+                                    err) && !cf2,
+                  "queued photo processed");
+        }
+        check(aq.empty(),
+              "restored photo is NOT re-processed (mutant: re-queued)");
+        check(wfi::recluster(rdb, 0.5, cc, err), "rebuild after restore");
+        check(rdb.people_list(pl, err) && pl.size() == 1 &&
+                  pl[0].id == alice_cid && pl[0].name == "Alice" &&
+                  pl[0].face_count == 1,
+              "Alice keeps her cluster, name and face through the cycle");
+
+        // A CHANGED return still re-queues and re-processes (the other
+        // half of the rule): new content = new faces.
+        write_file(rroot + "/alice.jpg", "alice-bytes-changed");
+        long jobd = rdb.begin_job(rroot);
+        wfi::ScanCounts cd;
+        check(wfi::scan_root(rdb, jobd, rroot, 8, cd, err), "changed walk");
+        check(cd.changed == 1 && cd.restored == 0,
+              "changed return re-queues");
+        check(rdb.queued_photos(100, aq, err) && aq.size() == 1,
+              "changed alice back in the queue");
+        {
+            std::vector<std::string> oc2;
+            bool cf2 = true;
+            check(rdb.replace_faces(aq[0].id, aq[0].size, aq[0].mtime, {fr},
+                                    oc2, cf2, err) && !cf2,
+                  "changed alice re-processed");
+        }
+
+        // A FAILED photo that goes missing and returns unchanged restores
+        // to 'failed' with its reason, not 'scanned' (reviewer #112 nit):
+        // the fail_reason CASE arm keeps the failure visible.
+        write_file(rroot + "/bob.jpg", "bob-bytes");
+        struct stat bst2;
+        check(stat((rroot + "/bob.jpg").c_str(), &bst2) == 0, "bob stat");
+        long jobe = rdb.begin_job(rroot);
+        check(rdb.observe(jobe, rroot, rroot + "/bob.jpg",
+                          (int64_t)bst2.st_size, (int64_t)bst2.st_mtime, err) == 1,
+              "bob queued");
+        check(rdb.flush(), "bob batch committed");
+        check(rdb.queued_photos(100, aq, err), "bob queue readable");
+        long bobid = 0;
+        for (const auto& qq : aq)
+            if (qq.path == rroot + "/bob.jpg") bobid = qq.id;
+        check(bobid > 0, "bob id resolved");
+        conflict = false;
+        check(rdb.mark_failed(bobid, bst2.st_size, bst2.st_mtime, "decode",
+                              conflict, err) && !conflict,
+              "bob marked failed");
+        check(unlink((rroot + "/bob.jpg").c_str()) == 0, "bob unlinked");
+        long jobf = rdb.begin_job(rroot);
+        wfi::ScanCounts cbf;
+        check(wfi::scan_root(rdb, jobf, rroot, 8, cbf, err), "bob-delete walk");
+        check(rdb.sweep_missing(jobf, rroot) == 1, "bob swept missing");
+        write_file(rroot + "/bob.jpg", "bob-bytes");
+        struct utimbuf bub;
+        bub.actime = bst2.st_atime;
+        bub.modtime = bst2.st_mtime;
+        check(utime((rroot + "/bob.jpg").c_str(), &bub) == 0,
+              "bob mtime restored");
+        long jobg = rdb.begin_job(rroot);
+        wfi::ScanCounts cg;
+        check(wfi::scan_root(rdb, jobg, rroot, 8, cg, err), "bob restore walk");
+        check(cg.restored == 1, "bob restored");
+        check(rdb.queued_photos(100, aq, err) && aq.empty(),
+              "failed restore does not re-queue");
+        {
+            sqlite3* raw = nullptr;
+            check(sqlite3_open((rdata + "/index.db").c_str(), &raw) == SQLITE_OK,
+                  "raw lifecycle connection opens");
+            sqlite3_stmt* st2 = nullptr;
+            check(sqlite3_prepare_v2(raw,
+                      "SELECT state, fail_reason FROM photos WHERE path = ?",
+                      -1, &st2, nullptr) == SQLITE_OK,
+                  "bob state query prepares");
+            sqlite3_bind_text(st2, 1, (rroot + "/bob.jpg").c_str(), -1,
+                              SQLITE_TRANSIENT);
+            check(sqlite3_step(st2) == SQLITE_ROW &&
+                      std::string((const char*)sqlite3_column_text(st2, 0)) ==
+                          "failed" &&
+                      std::string((const char*)sqlite3_column_text(st2, 1)) ==
+                          "decode",
+                  "failed photo restores to 'failed' with its reason");
+            sqlite3_finalize(st2);
+            sqlite3_close(raw);
+        }
+        // rdb closes at scope end (destructor).
     }
 
     // --threshold parsing (issue #67): validated strtod, finite, [-1,1].

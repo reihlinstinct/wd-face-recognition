@@ -108,9 +108,15 @@ real-hardware go/no-go data for milestone M2.
    (`/shares/Photos` + `/shares/Photos/2020`): rejected. Try a path
    outside `/shares/`: rejected.
 3. Save an EMPTY list: accepted (the shipped privacy default - the
-   indexer scans nothing).
+   indexer walks nothing). After the next indexer run, any previously
+   indexed photos are `missing` and their faces drop out of the People
+   counts - named people stay listed at zero faces, nothing is deleted.
 4. Re-add the real folder and run the indexer (or wait for its schedule):
-   the next run scans exactly the configured roots.
+   the next run scans exactly the configured roots, and unchanged
+   missing photos return WITHOUT re-processing (the summary line counts
+   them as `restored=`): their faces rejoin the same people with names
+   preserved. A photo whose content changed while away is re-queued
+   and re-processed as usual.
 
 ## 5. Rules
 - Only the synthetic self-test runs at this stage - the indexer does not scan

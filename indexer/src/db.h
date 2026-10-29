@@ -17,6 +17,7 @@ struct ScanCounts {
     long changed = 0;   // size/mtime changed, re-queued
     long skipped = 0;   // unchanged, reused as-is
     long missing = 0;   // previously known, gone from disk now
+    long restored = 0;  // back from missing unchanged, NOT re-queued (#112)
 
     bool incomplete = false;    // some dir unreadable: sweep_missing must skip
     bool depth_capped = false;  // walk stopped at max_depth: deeper indexed
@@ -72,12 +73,17 @@ public:
     long begin_job(const std::string& root);
     // One photo observation inside a scan. Batches commits internally.
     // Returns 0 skipped (unchanged), 1 added (new), 2 changed (re-queued),
-    // or -1 on error.
+    // 3 restored (back from missing with identical size+mtime - NOT
+    // re-queued, so processed face rows and cluster memberships survive,
+    // reviewer #112), or -1 on error.
     int observe(long job_id, const std::string& root, const std::string& path,
                 int64_t size, int64_t mtime, std::string& err);
     // Marks rows not seen by this job (per root) as missing; returns the
     // count, or -1 on a DB error.
     long sweep_missing(long job_id, const std::string& root);
+    // Every distinct root the photos table carries, sorted. Used to sweep
+    // roots that are no longer configured (root removal, #102).
+    bool distinct_roots(std::vector<std::string>& out, std::string& err);
     // Returns false when the update could not be persisted.
     bool finish_job(long job_id, const ScanCounts& c);
     // Up to `limit` photos in state 'queued', oldest first by path.

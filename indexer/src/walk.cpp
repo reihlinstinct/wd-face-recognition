@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cerrno>
 #include <cctype>
+#include <cstdlib>
 #include <dirent.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <vector>
 
@@ -76,6 +78,7 @@ bool walk_dir(Db& db, long job_id, const std::string& root, const std::string& a
             if (r < 0) return false;
             if (r == 1) ++c.added;
             else if (r == 2) ++c.changed;
+            else if (r == 3) ++c.restored;
             else ++c.skipped;
         }
     }
@@ -87,6 +90,94 @@ bool walk_dir(Db& db, long job_id, const std::string& root, const std::string& a
 bool scan_root(Db& db, long job_id, const std::string& root,
                int max_depth, ScanCounts& c, std::string& err) {
     return walk_dir(db, job_id, root, root, 0, max_depth, c, err);
+}
+
+namespace {
+
+// Split into segments: duplicate slashes and "." dropped, ".." KEPT
+// (kernel-order resolution applies ".." to the RESOLVED parent, so it
+// must survive until the symlink-aware step below, CodeRabbit #112).
+std::vector<std::string> split_segments(const std::string& path) {
+    std::vector<std::string> segs;
+    std::string cur;
+    for (const char ch : path) {
+        if (ch == '/') {
+            if (!cur.empty() && cur != ".") segs.push_back(cur);
+            cur.clear();
+        } else {
+            cur += ch;
+        }
+    }
+    if (!cur.empty() && cur != ".") segs.push_back(cur);
+    return segs;
+}
+
+std::string join_segments(const std::vector<std::string>& segs, bool absolute) {
+    std::string out = absolute ? "/" : "";
+    for (const std::string& seg : segs) {
+        if (!out.empty() && out.back() != '/') out += '/';
+        out += seg;
+    }
+    return out.empty() ? (absolute ? "/" : ".") : out;
+}
+
+}  // namespace
+
+std::string canonical_root(const std::string& path) {
+    // One consistent representation for the overlap gate (CodeRabbit
+    // #112): the longest EXISTING prefix resolves via realpath - with
+    // ".." kept in the spelling, because realpath applies it to the
+    // RESOLVED parent ("/shares/link/../Photos" where link is a symlink
+    // is NOT "/shares/Photos") - and the unresolved tail's segments then
+    // fold onto the canonical base: ".." pops one segment, which is safe
+    // lexically because the base is already canonical and a nonexistent
+    // tail contains no symlinks. A temporarily missing (unmounted) root
+    // and an existing symlinked neighbour therefore compare in one form.
+    const bool absolute = !path.empty() && path[0] == '/';
+    const std::vector<std::string> segs = split_segments(path);
+    std::string base;
+    size_t kept = segs.size();
+    while (true) {
+        const std::string cand =
+            join_segments({segs.begin(), segs.begin() + kept}, absolute);
+        char resolved[PATH_MAX];
+        if ((kept > 0 || absolute) &&
+            realpath(cand.c_str(), resolved) != nullptr) {
+            base = resolved;
+            break;
+        }
+        if (kept == 0) {  // nothing resolves: fold onto the bare anchor
+            base = absolute ? "/" : "";
+            break;
+        }
+        --kept;
+    }
+    std::vector<std::string> out = split_segments(base);
+    for (size_t i = kept; i < segs.size(); ++i) {
+        if (segs[i] == "..") {
+            if (!out.empty()) out.pop_back();
+        } else {
+            out.push_back(segs[i]);
+        }
+    }
+    return join_segments(out, base.empty() ? absolute : true);
+}
+
+bool roots_overlap(const std::string& canonical_a, const std::string& canonical_b) {
+    if (canonical_a == canonical_b) return true;
+    // Ancestor test with a segment boundary: "/a/b" is an ancestor of
+    // "/a/b/c" but not of "/a/bc".
+    if (canonical_a.size() < canonical_b.size() &&
+        canonical_b.compare(0, canonical_a.size(), canonical_a) == 0 &&
+        (canonical_a == "/" || canonical_b[canonical_a.size()] == '/')) {
+        return true;
+    }
+    if (canonical_b.size() < canonical_a.size() &&
+        canonical_a.compare(0, canonical_b.size(), canonical_b) == 0 &&
+        (canonical_b == "/" || canonical_a[canonical_b.size()] == '/')) {
+        return true;
+    }
+    return false;
 }
 
 }  // namespace wfi
