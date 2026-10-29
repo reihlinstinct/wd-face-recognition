@@ -37,6 +37,14 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", err.c_str());
         return 2;
     }
+    if (cfg.roots.empty()) {
+        // Nothing to walk (issue #108): exit successfully WITHOUT touching
+        // the DB - no job, no sweep, so clearing roots never false-marks
+        // stored photos missing. Sweeping unconfigured roots is the
+        // root-removal follow-up (docs/ROOTS-SETTINGS.md).
+        std::printf("no roots configured - nothing to scan\n");
+        return 0;
+    }
     // The index holds face data: never world-readable (review #45).
     umask(0077);
     wfi::renice_self();

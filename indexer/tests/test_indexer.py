@@ -88,6 +88,33 @@ def main():
     states = dict(db.execute("SELECT path, state FROM photos").fetchall())
     assert states[os.path.join(deep, "deep.jpg")] == "queued", states
 
+    # Empty roots (issue #108): the fresh-install default and a cleared
+    # list are a successful no-op walk, never an error, and the existing
+    # index is left byte-for-byte alone (no false missing sweep).
+    empty_data = os.path.join(tmp, "empty-data")
+    os.makedirs(empty_data)
+    econf = os.path.join(tmp, "empty.conf")
+    with open(econf, "w") as f:
+        f.write(f"roots=\ndata_dir={empty_data}\n")
+    r = subprocess.run([bin_path, "scan", "--config", econf],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"empty-roots scan failed: {r.stderr}"
+    assert "no roots configured" in r.stdout, r.stdout
+    assert r.stderr == "", r.stderr
+    assert not os.path.exists(os.path.join(empty_data, "index.db")), \
+        "no-op scan must not create an index"
+
+    cleared = os.path.join(tmp, "cleared.conf")
+    with open(cleared, "w") as f:
+        f.write(f"roots=\ndata_dir={data}\n")
+    before = dict(db.execute("SELECT path, state FROM photos").fetchall())
+    r = subprocess.run([bin_path, "scan", "--config", cleared],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"cleared-roots scan failed: {r.stderr}"
+    assert "no roots configured" in r.stdout, r.stdout
+    after = dict(db.execute("SELECT path, state FROM photos").fetchall())
+    assert after == before, (before, after)
+
     print("test_indexer: all assertions passed")
 
 if __name__ == "__main__":

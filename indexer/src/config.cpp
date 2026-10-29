@@ -51,10 +51,9 @@ bool load_config(const std::string& path, Config& out, std::string& err) {
             }
         }
     }
-    if (out.roots.empty()) {
-        err = "config has no roots= (nothing is scanned until roots are chosen)";
-        return false;
-    }
+    // Zero roots is valid (issue #108): a fresh install ships with none
+    // (privacy first, #56) and the settings page can clear them. Only the
+    // walk no-ops; wdf_faces DB work keeps running on the existing index.
     if (out.data_dir.empty()) {
         err = "config has no data_dir=";
         return false;

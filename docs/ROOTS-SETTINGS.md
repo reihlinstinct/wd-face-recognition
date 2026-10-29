@@ -77,12 +77,11 @@ not an error: a fresh install ships with no roots (privacy first,
 #56), and erroring on the shipped default would brick every new
 install's first run. "No-op" scopes to the scan only - the DB work
 below keeps running.
-Today `load_config` FAILS on an empty list ("config has no roots=")
-and the indexer/`wdf_faces` entry points exit nonzero - the
-implementation PR changes that. The matrix (CodeRabbit #103): only the
-WALK is the no-op; DB work keeps running. `load_config` accepts zero
-roots; `wdf_indexer` prints "no roots configured - nothing to scan",
-skips walking, exits 0 - but the sweep below still runs; `wdf_faces`
+Shipped matrix (#108, per CodeRabbit #103): only the WALK is the
+no-op; DB work keeps running. `load_config` accepts zero roots;
+`wdf_indexer` prints "no roots configured - nothing to scan", skips
+the walk and exits 0 WITHOUT touching the DB (no job, no sweep -
+clearing roots never false-marks stored photos missing); `wdf_faces`
 DB operations (`process`, `cluster`, `gc`, people rename/merge) keep
 operating on the existing index; read commands are unaffected. The
 contract test pins BOTH halves end to end (CodeRabbit #103): on a
