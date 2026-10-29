@@ -211,26 +211,38 @@ check(os.path.exists(os.path.join(elsewhere, "keepme.jpg")),
 os.unlink(crops)
 os.mkdir(crops)
 
-# Instance lock (issue #46): with a live PID in data_dir/wdf.lock, a
-# mutating command exits politely while the read commands stay usable.
+# Instance lock (issues #46, #98): a held flock makes mutating commands
+# exit politely while the read commands stay usable; release frees it.
+import fcntl
 lock_path = os.path.join(data, "wdf.lock")
-with open(lock_path, "w") as f:
-    f.write(f"{os.getpid()}\n")
+lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT)
+fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 r = run("process", "--config", conf)
 check(r.returncode == 1 and "already running" in r.stderr,
       "second process run refused politely")
 r = run("rename", "--config", conf, "--id", str(keep_id), "--name", "X")
 check(r.returncode == 1 and "already running" in r.stderr,
       "rename under a live lock refused")
+r = run("gc", "--config", conf)
+check(r.returncode == 1 and "already running" in r.stderr,
+      "gc under a live lock refused")
 r = run("people", "--config", conf)
 check("already running" not in r.stderr, "read command stays lock-free")
-# A stale lockfile (dead PID) is reclaimed by the next mutating run.
-with open(lock_path, "w") as f:
-    f.write("999999\n")
+os.close(lock_fd)
 r = run("cluster", "--config", conf)
 check(r.returncode == 0 and "already running" not in r.stderr,
-      "stale lockfile reclaimed")
-check(not os.path.exists(lock_path), "lockfile released at exit")
+      "released lock lets a mutating run through")
+
+# gc failure accounting (review #99): an unremovable crop is counted,
+# named on stderr, and fails the run.
+with open(os.path.join(crops, "stuck.jpg"), "w") as f:
+    f.write("x")
+os.chmod(crops, 0o555)
+r = run("gc", "--config", conf)
+os.chmod(crops, 0o755)
+check(r.returncode == 1 and "failed=1" in r.stdout and
+      "stuck.jpg" in r.stderr, "failed unlink counted and named")
+os.remove(os.path.join(crops, "stuck.jpg"))
 
 if fails:
     print(f"test_faces_cli: {fails} FAILURES", file=sys.stderr)
