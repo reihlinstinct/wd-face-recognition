@@ -114,18 +114,28 @@ no configured roots still opens one job and sweeps every stored root
 under it - clearing ALL roots flips every indexed photo to `missing`
 (reversible; re-adding a root restores it).
 
-Coverage gate on unconfigured sweeps (CodeRabbit #103): a configured
-root's sweep already runs only after a COMPLETE walk (a depth-capped
-or unreadable walk is INCOMPLETE and skips the sweep). The
-unconfigured-root analog is overlap: a stored root is swept only when
-NO configured root overlaps it (neither ancestor nor descendant, on
-canonicalized paths - the rule-9 relation). Removing `/shares/Photos`
-while `/shares/Photos/2020` stays configured must not sweep the stored
-`/shares/Photos` root: files beneath it are still observed under the
-surviving subroot, and an ungated sweep would mark observed photos
-`missing`. Regression test: index under `/shares/Photos`, narrow the
-config to `/shares/Photos/2020`, rescan - photos under `2020` stay
-`scanned`, the rest flip to `missing`.
+Coverage gate on unconfigured sweeps (CodeRabbit #103, reviewer):
+a configured root's sweep already runs only after a COMPLETE walk (a
+depth-capped or unreadable walk is INCOMPLETE and skips the sweep).
+An unconfigured stored root has no walk, and its sweep is exact for
+complete coverage because re-observed photos are exempt through
+`last_seen_job`: `observe()` keys rows by path, so a file beneath the
+removed root that is still walked under a surviving configured
+subroot keeps its stored `root` and only updates `last_seen_job` to
+the run's job - sweeping the stored root under that job then marks
+only genuinely unobserved photos `missing`, never the re-observed
+ones. The one hazard is INCOMPLETE coverage: if an overlapping
+configured root's walk was depth-capped or hit unreadable
+directories, the files it failed to reach look unobserved and would
+be wrongly swept. Rule: an unconfigured stored root overlapped by
+configured roots (ancestor/descendant, canonicalized - the rule-9
+relation) is swept under the run's shared job only when EVERY
+overlapping configured root's walk completed this run; any incomplete
+overlapping walk skips that sweep. Regression tests: (a) index under
+`/shares/Photos`, narrow the config to `/shares/Photos/2020`, rescan -
+photos under `2020` stay `scanned`, the rest flip to `missing`;
+(b) the same setup with an unreadable `2020` subdir (incomplete walk)
+flips nothing.
 
 ## Missing photos and identity data
 
@@ -167,5 +177,6 @@ sees either the old config or the new one, never a mix.
 - Root removal: photos under a removed root flip to `missing` on the
   next scan, are excluded from `process`/`cluster` and people counts
   while missing, and recover when the root is re-added; one shared job
-  generation per run is pinned (no observed photo is swept).
+  generation per run is pinned (no observed photo is swept); an
+  incomplete overlapping walk suppresses the unconfigured sweep.
 - `DEVICE-TEST.md` gains the roots-editing step.
