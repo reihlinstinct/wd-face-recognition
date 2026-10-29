@@ -74,14 +74,36 @@
     },
     {
       "pattern": "scripts/**",
-      "checks": [
-        "lint"
-      ]
+      "checks": []
     },
     {
       "pattern": ".gitleaks.toml",
       "checks": [
         "secret-scan"
+      ]
+    },
+    {
+      "pattern": "bench/rust/**",
+      "checks": [
+        "shootout"
+      ]
+    },
+    {
+      "pattern": "bench/python/**",
+      "checks": [
+        "shootout"
+      ]
+    },
+    {
+      "pattern": "bench/run_suite.*",
+      "checks": [
+        "shootout"
+      ]
+    },
+    {
+      "pattern": "packaging/**",
+      "checks": [
+        "apkg"
       ]
     }
   ]
