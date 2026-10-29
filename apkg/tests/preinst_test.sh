@@ -24,6 +24,15 @@ ELAPSED=$(( $(date +%s) - START ))
 kill -0 "$FAKE_PID" 2>/dev/null && fail "runaway indexer survived preinst"
 [ "$ELAPSED" -ge 2 ] || fail "preinst did not wait for the runaway indexer"
 
+# Escalation path (review #101): a fake indexer that ignores SIGTERM
+# must be taken down by SIGKILL; the install proceeds only once nothing
+# survives.
+cp "$(command -v sh)" "$WORK/wdf_faces"
+"$WORK/wdf_faces" -c 'trap "" TERM; while :; do sleep 1; done' &
+STUBBORN_PID=$!
+WDF_QUIESCE_MAX_SECS=1 sh preinst.sh "$PWD" || fail "preinst exits nonzero (escalation)"
+kill -0 "$STUBBORN_PID" 2>/dev/null && fail "SIGTERM-ignoring process survived preinst"
+
 # Fast path: nothing running - no wait at all.
 START=$(date +%s)
 WDF_QUIESCE_MAX_SECS=5 sh preinst.sh "$PWD" || fail "preinst exits nonzero (idle)"
