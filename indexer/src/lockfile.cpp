@@ -13,6 +13,13 @@ InstanceLock::~InstanceLock() {
 }
 
 bool InstanceLock::acquire(const std::string& path, std::string& err) {
+    // One lock per object (review #101): a second acquire would abandon
+    // the first descriptor while the kernel still holds its lock until
+    // process exit.
+    if (fd_ >= 0) {
+        err = "this instance already holds the lock";
+        return false;
+    }
     // flock(2) (issue #98): the lock belongs to the open file
     // description and the kernel drops it on ANY exit, crash included -
     // no stale-PID detection, reclamation, or temp files to get wrong.

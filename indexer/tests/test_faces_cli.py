@@ -237,18 +237,22 @@ check(r.returncode == 0 and "already running" not in r.stderr,
 # named on stderr, and fails the run.
 with open(os.path.join(crops, "stuck.jpg"), "w") as f:
     f.write("x")
-if os.geteuid() == 0:
-    # chmod does not stop root's unlink (review #101).
-    pass
-else:
-    try:
-        os.chmod(crops, 0o555)
-        r = run("gc", "--config", conf)
-    finally:
-        os.chmod(crops, 0o755)
+os.chmod(crops, 0o555)
+try:
+    r = run("gc", "--config", conf)
+finally:
+    os.chmod(crops, 0o755)
+if os.path.exists(os.path.join(crops, "stuck.jpg")):
+    # The mode really blocked the unlink: the failure path ran.
     check(r.returncode == 1 and "failed=1" in r.stdout and
           "stuck.jpg" in r.stderr, "failed unlink counted and named")
     os.remove(os.path.join(crops, "stuck.jpg"))
+else:
+    # Permission override (root, CAP_DAC_OVERRIDE, ...) - 0555 could not
+    # block the unlink (review #101), so there is no failure to assert;
+    # the probe result replaces an euid guess.
+    check(r.returncode == 0 and "failed=0" in r.stdout,
+          "unremovable crop unlinked under privilege override")
 
 if fails:
     print(f"test_faces_cli: {fails} FAILURES", file=sys.stderr)

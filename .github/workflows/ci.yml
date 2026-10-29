@@ -90,6 +90,8 @@ jobs:
         # Four sandbox states: fresh default, hand-made config adoption,
         # both-exist backup, persistent-only idempotency.
         run: sh apkg/tests/init_conf_test.sh
+      - name: preinst.sh quiesces a running indexer
+        run: sh apkg/tests/preinst_test.sh
   indexer-test:
     # wdf_indexer skeleton (issue #40): mtime-delta walk + SQLite index.
     runs-on: ubuntu-latest

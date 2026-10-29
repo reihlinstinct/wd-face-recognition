@@ -1228,12 +1228,48 @@ int main() {
         std::set<std::string> paths;
         check(db6.all_crop_paths(paths, err) && paths.size() == 1,
               "crop paths readable without faults");
-        // Interrupt every VDBE step: the scan cannot finish.
-        sqlite3_progress_handler(db6.handle_for_test(), 1,
-                                 [](void*) -> int { return 1; }, nullptr);
-        paths.insert("stale");
-        check(!db6.all_crop_paths(paths, err) && paths.empty(),
-              "interrupted crop-path scan fails with an empty set");
+        // Interrupt mid-scan (review #101): a first clean pass counts
+        // the VDBE instructions of a full scan, the second interrupts at
+        // the halfway point - with three faces at least one row has been
+        // collected by then, so the empty set proves partial-scan
+        // cleanup and not just an upfront clear.
+        wfi::FaceRow frg2 = frg, frg3 = frg;
+        frg2.crop_path = "crops/g_t1_f1.jpg";
+        frg3.crop_path = "crops/g_t1_f2.jpg";
+        // A rescan re-queues the photo at a newer mtime; the three rows
+        // then replace the single one (the version guard refuses a
+        // replace on a photo that is not queued at that exact version).
+        long jobg2 = db6.begin_job(tmp6);
+        check(db6.observe(jobg2, tmp6, tmp6 + "/g.jpg", 2, 1001, err) == 2,
+              "gc-fi photo re-queued");
+        check(db6.replace_faces(gq[0].id, 2, 1001,
+                                {frg, frg2, frg3}, oldg, conflictf, err) &&
+                  conflictf == false,
+              "gc-fi three faces committed");
+        int instructions = 0;
+        sqlite3_progress_handler(
+            db6.handle_for_test(), 1,
+            [](void* p) -> int { ++*(int*)p; return 0; }, &instructions);
+        check(db6.all_crop_paths(paths, err) && paths.size() == 3,
+              "calibration scan collects all three");
+        check(instructions > 0, "progress handler fired during calibration");
+        const int cut = instructions / 2;
+        check(cut > 0 && cut < instructions,
+              "cutoff sits strictly inside the scan");
+        {
+            int state[2] = {0, cut};  // calls so far, cutoff
+            sqlite3_progress_handler(
+                db6.handle_for_test(), 1,
+                [](void* p) -> int {
+                    int* st = (int*)p;
+                    return ++st[0] >= st[1] ? 1 : 0;
+                },
+                state);
+            paths.clear();
+            paths.insert("stale");
+            check(!db6.all_crop_paths(paths, err) && paths.empty(),
+                  "interrupted crop-path scan fails with an empty set");
+        }
         sqlite3_progress_handler(db6.handle_for_test(), 0, nullptr, nullptr);
     }
 
@@ -1249,6 +1285,9 @@ int main() {
             check(!l2.acquire(lockp, err) &&
                       err.find("already running") != std::string::npos,
                   "second instance refused politely");
+            check(!l1.acquire(lockp, err) &&
+                      err.find("already holds") != std::string::npos,
+                  "the same object cannot take a second lock");
         }
         {
             wfi::InstanceLock l3;
