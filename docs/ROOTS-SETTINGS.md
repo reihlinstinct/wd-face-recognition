@@ -72,9 +72,11 @@ adds the `fsync` before the rename.
 
 ## Empty roots contract
 
-The empty list must be a SUCCESSFUL no-op everywhere, not an error: a
-fresh install ships with no roots (privacy first, #56), and erroring
-on the shipped default would brick every new install's first run.
+The empty list must be a SUCCESSFUL no-op FOR THE FILESYSTEM SCAN,
+not an error: a fresh install ships with no roots (privacy first,
+#56), and erroring on the shipped default would brick every new
+install's first run. "No-op" scopes to the scan only - the DB work
+below keeps running.
 Today `load_config` FAILS on an empty list ("config has no roots=")
 and the indexer/`wdf_faces` entry points exit nonzero - the
 implementation PR changes that. The matrix (CodeRabbit #103): only the
@@ -100,10 +102,15 @@ clusters and missed missing-file sweeps (CodeRabbit #103). The
 implementation PR closes this in the indexer: after sweeping each
 configured root, `wdf_indexer` also sweeps every DISTINCT `root`
 stored in `photos` that is no longer configured. Such a sweep needs no
-walk: nothing under that root was observed in this job, so every one
-of its photos is marked `missing`, its faces stop feeding identity
-rebuilds, and re-adding the root later re-queues them through the
-normal `missing -> changed` path.
+walk, and only its photos NOT observed in the run's shared job flip
+to `missing`: an overlapping configured root may have re-observed
+some of them. Unchanged re-observations keep their stored root and
+update only `last_seen_job` (exempt via `last_seen_job == J`);
+changed or back-from-`missing` ones adopt the current walk's root
+(`observe()` sets `root = excluded.root`), leaving the stored root
+entirely - both kinds escape the sweep. The rest flip to `missing`,
+their faces stop feeding identity rebuilds, and re-adding the root
+later re-queues them through the normal `missing -> changed` path.
 
 One job generation per RUN, shared by every configured root and by the
 unconfigured-root sweeps (CodeRabbit #103): `sweep_missing` marks
@@ -118,13 +125,13 @@ Coverage gate on unconfigured sweeps (CodeRabbit #103, reviewer):
 a configured root's sweep already runs only after a COMPLETE walk (a
 depth-capped or unreadable walk is INCOMPLETE and skips the sweep).
 An unconfigured stored root has no walk, and its sweep is exact for
-complete coverage because re-observed photos are exempt through
-`last_seen_job`: `observe()` keys rows by path, so a file beneath the
-removed root that is still walked under a surviving configured
-subroot keeps its stored `root` and only updates `last_seen_job` to
-the run's job - sweeping the stored root under that job then marks
-only genuinely unobserved photos `missing`, never the re-observed
-ones. The one hazard is INCOMPLETE coverage: if an overlapping
+complete coverage because re-observed photos are exempt: `observe()`
+keys rows by path, so a file beneath the removed root that is still
+walked under a surviving configured subroot is re-observed under the
+run's job - unchanged, it keeps its stored `root` and updates only
+`last_seen_job`; changed, it adopts the subroot as its `root` -
+and either way sweeping the stored root under that job marks only
+genuinely unobserved photos `missing`, never the re-observed ones. The one hazard is INCOMPLETE coverage: if an overlapping
 configured root's walk was depth-capped or hit unreadable
 directories, the files it failed to reach look unobserved and would
 be wrongly swept. Rule: an unconfigured stored root overlapped by
