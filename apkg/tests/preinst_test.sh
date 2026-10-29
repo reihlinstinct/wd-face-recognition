@@ -33,6 +33,18 @@ STUBBORN_PID=$!
 WDF_QUIESCE_MAX_SECS=1 sh preinst.sh "$PWD" || fail "preinst exits nonzero (escalation)"
 kill -0 "$STUBBORN_PID" 2>/dev/null && fail "SIGTERM-ignoring process survived preinst"
 
+# Grace period is real (reviewer): a fake that exits voluntarily after
+# ~2s must never be signaled, and preinst must have waited for it.
+cp "$(command -v sh)" "$WORK/wdf_indexer"
+"$WORK/wdf_indexer" -c 'trap "touch '"$WORK"'/signaled" TERM; sleep 2' &
+WILLING_PID=$!
+START=$(date +%s)
+WDF_QUIESCE_MAX_SECS=10 sh preinst.sh "$PWD" || fail "preinst exits nonzero (grace)"
+ELAPSED=$(( $(date +%s) - START ))
+[ -e "$WORK/signaled" ] && fail "voluntary exit was signaled anyway"
+[ "$ELAPSED" -ge 1 ] || fail "preinst did not wait out the grace period"
+kill -0 "$WILLING_PID" 2>/dev/null && fail "voluntary fake still running"
+
 # Fast path: nothing running - no wait at all.
 START=$(date +%s)
 WDF_QUIESCE_MAX_SECS=5 sh preinst.sh "$PWD" || fail "preinst exits nonzero (idle)"
