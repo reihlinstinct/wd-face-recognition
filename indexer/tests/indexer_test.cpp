@@ -1234,6 +1234,36 @@ int main() {
                   std::strtol(buf, nullptr, 10) == (long)getpid(),
               "reclaimed lock holds the new owner's pid");
         if (rfd >= 0) close(rfd);
+        // CodeRabbit #97: the holder PID lands complete (temp+link), and
+        // the temp file never survives.
+        const std::string want = std::to_string((long)getpid()) + "\n";
+        check(buf == want, "lockfile content is exactly the holder pid");
+        check(access((lockp + ".tmp." + std::to_string((long)getpid())).c_str(),
+                     F_OK) != 0,
+              "no temp lockfile left behind");
+        // A numeric prefix with trailing junk is NOT a live holder: with
+        // only a strtol prefix parse this file would name our own live
+        // pid and block every later instance.
+        {
+            const std::string junk = want.substr(0, want.size() - 1) + "junk\n";
+            const int jfd = open(lockp.c_str(), O_WRONLY | O_TRUNC);
+            check(jfd >= 0 && write(jfd, junk.c_str(), junk.size()) ==
+                                     (ssize_t)junk.size(),
+                  "junk-suffix lockfile planted");
+            if (jfd >= 0) close(jfd);
+            wfi::InstanceLock l4;
+            check(l4.acquire(lockp, err),
+                  "junk suffix is not a live pid (reclaimed)");
+        }
+        // An empty lockfile (a legacy or crashed writer) is stale too.
+        {
+            wfi::InstanceLock l5;
+            check(l5.acquire(lockp, err), "lock re-acquired after release");
+            const int efd = open(lockp.c_str(), O_WRONLY | O_TRUNC);
+            if (efd >= 0) close(efd);  // l5 still "holds" it; dropped below
+            wfi::InstanceLock l6;
+            check(l6.acquire(lockp, err), "empty lockfile reclaimed");
+        }
     }
 
     // JSON for the PHP pages (issue #50, PR 3c): escaping and shape.
