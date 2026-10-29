@@ -30,6 +30,13 @@ function wdf_roots_read(string $confPath): ?array
     return $out;
 }
 
+// index.php renders these messages unescaped, so embedded user input
+// is escaped at build time (ENT_QUOTES, UTF-8).
+function wdf_roots_err(string $prefix, string $line): string
+{
+    return $prefix . htmlspecialchars($line, ENT_QUOTES, 'UTF-8');
+}
+
 // Validate the textarea lines. Returns the cleaned root list, or null
 // with $err set. An empty list is valid - it is the shipped default
 // (privacy first, #56: a fresh install scans nothing).
@@ -47,32 +54,35 @@ function wdf_roots_validate(array $lines, ?string &$err,
         }
         if (strlen($line) > WDF_ROOTS_PATH_MAX) {
             $err = 'Path too long (max ' . WDF_ROOTS_PATH_MAX . ' bytes): '
-                . substr($line, 0, 60) . '...';
+                . htmlspecialchars(substr($line, 0, 60), ENT_QUOTES, 'UTF-8') . '...';
             return null;
         }
         if (strpos($line, ',') !== false) {
             // roots= is comma-separated: a comma would silently split
             // one root into two.
-            $err = 'Paths must not contain commas: ' . $line;
+            $err = wdf_roots_err('Paths must not contain commas: ', $line);
             return null;
         }
         if (strpos($line, $allowedPrefix) !== 0) {
-            $err = 'Each root must be an absolute path under '
-                . $allowedPrefix . ': ' . $line;
+            $err = wdf_roots_err('Each root must be an absolute path under '
+                . $allowedPrefix . ': ', $line);
             return null;
         }
+        // Deliberately a conservative SUBSTRING match (a folder named
+        // "a..b" is rejected too): same guard as settings.php, and a
+        // false rejection here costs the owner one renamed folder.
         if (strpos($line, '..') !== false) {
-            $err = 'The path must not contain "..": ' . $line;
+            $err = wdf_roots_err('The path must not contain "..": ', $line);
             return null;
         }
         if (!wdf_path_symlink_components_ok($line, $allowedPrefix)) {
-            $err = 'Symlinks are only allowed at the share level: ' . $line;
+            $err = wdf_roots_err('Symlinks are only allowed at the share level: ', $line);
             return null;
         }
         if (!is_dir($line)) {
             // Unlike the output folder (a future state the app creates),
             // a scan root that does not exist is a typo.
-            $err = 'Folder not found on this NAS: ' . $line;
+            $err = wdf_roots_err('Folder not found on this NAS: ', $line);
             return null;
         }
         if ($shareRoots === null) {
@@ -82,7 +92,7 @@ function wdf_roots_validate(array $lines, ?string &$err,
         // share-level symlink and any ./ or // components.
         $real = wdf_realpath_lenient($line);
         if (!wdf_real_path_under_roots($real, $shareRoots)) {
-            $err = 'The folder must stay inside a share: ' . $line;
+            $err = wdf_roots_err('The folder must stay inside a share: ', $line);
             return null;
         }
         if (in_array($real, $rootsReal, true)) {
@@ -92,7 +102,7 @@ function wdf_roots_validate(array $lines, ?string &$err,
             if (wdf_paths_overlap($real, $existing)) {
                 // Nested roots double-scan the subtree per run and their
                 // per-root missing sweeps confuse each other (rule 9).
-                $err = 'Roots must not contain one another: ' . $line;
+                $err = wdf_roots_err('Roots must not contain one another: ', $line);
                 return null;
             }
         }
