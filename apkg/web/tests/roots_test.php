@@ -79,7 +79,9 @@ check(file_get_contents($conf)
       === "data_dir=/data\nroots={$prefix}Photos\nmax_depth=8\n",
     'duplicate roots= lines collapsed to one');
 
-// empty list persists as an empty value
+// empty list persists as an empty value (fresh fixture: the dupe
+// collapse above left max_depth in the file)
+file_put_contents($conf, "data_dir=/data\nroots={$prefix}Photos\n");
 check(wdf_roots_save($conf, [], $err), 'empty save succeeds');
 check(file_get_contents($conf) === "data_dir=/data\nroots=\n", 'empty list persists');
 check(wdf_roots_read($conf) === [], 'empty roots read back');
