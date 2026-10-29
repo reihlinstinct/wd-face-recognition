@@ -71,6 +71,14 @@ check(wdf_roots_save($conf, [$prefix . 'Photos'], $err), 'append save succeeds')
 check(file_get_contents($conf) === "data_dir=/data\nroots={$prefix}Photos\n",
     'missing roots= appended with a newline');
 
+// duplicate roots= lines: first replaced, the rest dropped (the C++
+// loader accumulates across duplicates - a leftover would stay live)
+file_put_contents($conf, "data_dir=/data\nroots=/old1\nmax_depth=8\nroots=/old2\n");
+check(wdf_roots_save($conf, [$prefix . 'Photos'], $err), 'dupe save succeeds');
+check(file_get_contents($conf)
+      === "data_dir=/data\nroots={$prefix}Photos\nmax_depth=8\n",
+    'duplicate roots= lines collapsed to one');
+
 // empty list persists as an empty value
 check(wdf_roots_save($conf, [], $err), 'empty save succeeds');
 check(file_get_contents($conf) === "data_dir=/data\nroots=\n", 'empty list persists');

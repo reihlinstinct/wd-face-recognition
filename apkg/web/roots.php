@@ -140,9 +140,15 @@ function wdf_roots_save(string $confPath, array $roots, ?string &$err): bool
     for ($i = 0; $i < count($lines); $i += 2) {
         $content = $lines[$i];
         $eol = $lines[$i + 1] ?? '';
-        if (!$replaced && preg_match('/^\s*roots\s*=/', $content) === 1) {
-            $content = $line;
-            $replaced = true;
+        if (preg_match('/^\s*roots\s*=/', $content) === 1) {
+            if (!$replaced) {
+                $out .= $line . $eol;
+                $replaced = true;
+            }
+            // Drop any duplicate roots= lines (CodeRabbit #107): the
+            // C++ loader ACCUMULATES roots across them, so a leftover
+            // duplicate would keep stale roots live.
+            continue;
         }
         $out .= $content . $eol;
     }
@@ -168,6 +174,14 @@ function wdf_roots_save(string $confPath, array $roots, ?string &$err): bool
         @unlink($tmpPath);
         $err = 'Could not save the indexer config - nothing was changed.';
         return false;
+    }
+    // Best-effort durability (CodeRabbit #107): without a directory sync
+    // a power loss can revert the renamed entry to the old wfi.conf even
+    // though the save reported success.
+    $dh = @fopen(dirname($target), 'r');
+    if ($dh !== false) {
+        @fsync($dh);
+        fclose($dh);
     }
     return true;
 }
