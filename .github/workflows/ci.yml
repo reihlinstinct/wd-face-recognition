@@ -85,7 +85,7 @@ jobs:
       - name: People pages tests (PHP)
         # People list/person/crop backend: config parsing, JSON shape,
         # escaping, PIN-gated crop serving (issue #50).
-        run: php apkg/web/tests/people_test.php && php apkg/web/tests/people_post_test.php
+        run: php apkg/web/tests/people_test.php && php apkg/web/tests/people_post_test.php && php apkg/web/tests/roots_test.php && php apkg/web/tests/roots_post_test.php
       - name: init.sh wfi.conf materialization (issue #56)
         # Four sandbox states: fresh default, hand-made config adoption,
         # both-exist backup, persistent-only idempotency.

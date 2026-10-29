@@ -97,7 +97,22 @@ detection+decode <= 2 s/photo at 2 threads, peak RSS <= 1.5 GB, UI backend
 idle <= 256 MB, startup <= 30 s. These values are IN the JSON. That is the
 real-hardware go/no-go data for milestone M2.
 
-## 4. Rules
+## 4. Scan roots settings (issue #102)
+1. In the app page's **Scan roots** section, enter two folders under
+   `/shares/` (one per line) and **Save scan roots** - the page confirms
+   and `wfi.conf` (via SMB: app dir symlink, real file in the persistent
+   data path) shows the new comma-separated `roots=` line with every
+   other line untouched, and the symlink itself is still a symlink.
+2. Try a folder that does not exist: rejected with a clear message, and
+   the config is unchanged. Try one root inside another
+   (`/shares/Photos` + `/shares/Photos/2020`): rejected. Try a path
+   outside `/shares/`: rejected.
+3. Save an EMPTY list: accepted (the shipped privacy default - the
+   indexer scans nothing).
+4. Re-add the real folder and run the indexer (or wait for its schedule):
+   the next run scans exactly the configured roots.
+
+## 5. Rules
 - Only the synthetic self-test runs at this stage - the indexer does not scan
   anything until folders are chosen in the UI (default: nothing scanned).
 - If a step fails, stop there and report the step number + what happened;

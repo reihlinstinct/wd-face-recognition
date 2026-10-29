@@ -18,6 +18,7 @@ require_once __DIR__ . '/run.php';
 require_once __DIR__ . '/browse.php';
 require_once __DIR__ . '/status.php';
 require_once __DIR__ . '/settings.php';
+require_once __DIR__ . '/roots.php';
 $version = '0.2.5';
 $appDir = realpath(dirname(__DIR__));
 $demoBin = $appDir . '/bin/wdf_demo';
@@ -54,6 +55,10 @@ if (empty($_SESSION['csrf'])) {
 $csrf = $_SESSION['csrf'];
 
 $status = wdf_demo_status_live($runLog);
+
+if (($_GET['ok'] ?? '') === 'roots') {
+    $msg = 'Scan roots saved - they apply to the next indexer run.';
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $token = (string)($_POST['csrf'] ?? '');
@@ -97,6 +102,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             flock($lock, LOCK_UN);
             fclose($lock);
+        }
+    } elseif ($action === 'set_roots') {
+        // Scan roots (issue #102): validated one path per line, joined
+        // back with commas into wfi.conf. No run lock needed - the save
+        // is an atomic rename, and the indexer reads the config once at
+        // startup, so a mid-save process sees old or new, never a mix.
+        $rootsErr = null;
+        // Test seam (like WDF_STATE_FILE/WDF_WFI_CONFIG): the shares
+        // prefix is fixed on device, overridable in handler tests.
+        $rootsPrefix = getenv('WDF_SHARES_PREFIX') !== false
+            ? (string)getenv('WDF_SHARES_PREFIX') : '/shares/';
+        $roots = wdf_roots_validate(
+            preg_split('/\r?\n/', (string)($_POST['roots'] ?? '')),
+            $rootsErr, $rootsPrefix);
+        if ($roots === null) {
+            $msg = $rootsErr;
+        } elseif (!wdf_roots_save(wdf_wfi_config_path($appDir), $roots, $rootsErr)) {
+            $msg = $rootsErr;
+        } else {
+            header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . '?ok=roots', true, 303);
+            exit;
         }
     } elseif ($action === 'cancel') {
         // Signal the demo only while the logged PID still belongs to the
@@ -313,6 +339,34 @@ folder it did not create. תיקיית התוצאות - אפשר לבחור תי
 <input type="text" id="output_dir" name="output_dir"
        placeholder="/shares/facerecog-reports/demo-out" required><br>
 <button type="submit">Change output folder</button>
+</form>
+
+<h2>Scan roots</h2>
+<?php
+$wfiConf = wdf_wfi_config_path($appDir);
+$currentRoots = wdf_roots_read($wfiConf);
+?>
+<form method="post">
+<input type="hidden" name="csrf" value="<?= htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8') ?>">
+<input type="hidden" name="action" value="set_roots">
+<?php if (!wdf_pin_session_ok($pinFile)): ?>
+<label for="pin-roots">Demo PIN</label> (required to change settings):<br>
+<input type="password" id="pin-roots" name="pin" autocomplete="one-time-code"
+       autocapitalize="off" autocorrect="off" spellcheck="false" required><br>
+<?php endif; ?>
+<?php if ($currentRoots === null): ?>
+<p class="msg">The indexer config (<?= htmlspecialchars($wfiConf, ENT_QUOTES, 'UTF-8') ?>)
+is not readable - toggle the app off and back on to recreate it.</p>
+<?php else: ?>
+<label for="roots">Folders the indexer scans</label> - one absolute path per line, under /shares/:<br>
+<span class="hint">Each folder must exist. A share itself is fine. Nested roots (one inside another)
+are rejected, and an empty list scans nothing - the privacy-first default. Changes apply to the next
+indexer run, not one already in flight.</span><br>
+<textarea id="roots" name="roots" rows="6" style="width:100%;box-sizing:border-box;font-family:monospace;padding:8px"
+          placeholder="/shares/Photos"><?= htmlspecialchars(implode("
+", $currentRoots), ENT_QUOTES, 'UTF-8') ?></textarea><br>
+<button type="submit">Save scan roots</button>
+<?php endif; ?>
 </form>
 
 <?php if ($msg !== ''): ?>
