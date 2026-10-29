@@ -73,6 +73,26 @@ sh "$APP/init.sh" "$APP" >/dev/null 2>&1
 linkok "$APP" "$PERSIST" || bad 'case 4: symlink resolves to the persistent config'
 grep -q '^roots=/shares/Keep$' "$PERSIST/wfi.conf" || bad 'persistent config modified'
 
+# --- case 5: fault injection - a failing mv leaves no partial state ------
+# (review #91: without this the old non-atomic direct write would pass
+# the whole suite). A PATH-stubbed mv fails; init.sh must exit 1 with
+# no wfi.conf and no leftover temp file, and the next normal run must
+# recover.
+setup
+STUB="$WORK/stub"
+mkdir -p "$STUB"
+printf '#!/bin/sh\nexit 1\n' > "$STUB/mv"
+chmod +x "$STUB/mv"
+PATH="$STUB:$PATH" sh "$APP/init.sh" "$APP" >/dev/null 2>&1
+rc=$?
+[ "$rc" -eq 1 ] || bad "failing mv: init.sh exits 1 (got $rc)"
+[ ! -f "$PERSIST/wfi.conf" ] || bad 'failing mv: no wfi.conf installed'
+ls "$PERSIST"/wfi.conf.tmp.* >/dev/null 2>&1 && bad 'failing mv: temp file left behind'
+sh "$APP/init.sh" "$APP" >/dev/null 2>&1
+rc=$?
+[ "$rc" -eq 0 ] || bad 'next run recovers'
+grep -q '^roots=$' "$PERSIST/wfi.conf" || bad 'recovery wrote the default config'
+
 # --- no stray temp dirs: the trap removes $WORK, checked by the caller ----
 if [ "$fails" -gt 0 ]; then
 	echo "$fails check(s) failed" >&2
