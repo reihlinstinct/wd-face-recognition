@@ -76,4 +76,15 @@ class GuardTests(unittest.TestCase):
             self.assertFalse(g.scan(p))
             (p/'req.txt').write_text('x>=1\n')
             self.assertIn('unhashed-requirement',{f.rule for f in g.scan(p)})
+    def test_multiple_requirement_files_all_scanned(self):
+        # CodeRabbit #124: the hash check captured only the LAST -r on an
+        # install line, so an unhashed first file escaped.
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d);(p/'.github/workflows').mkdir(parents=True)
+            (p/'.github/workflows/test.yml').write_text('permissions: {}\nrun: pip install --require-hashes -r first.txt --requirement second.txt\n')
+            (p/'first.txt').write_text('unhashedpkg>=1\n')
+            (p/'second.txt').write_text('x==1 --hash=sha256:'+'a'*64+'\n')
+            findings=g.scan(p)
+            self.assertIn('first.txt',{f.path for f in findings if f.rule=='unhashed-requirement'})
+            self.assertNotIn('second.txt',{f.path for f in findings if f.rule=='unhashed-requirement'})
 if __name__=='__main__':unittest.main()
