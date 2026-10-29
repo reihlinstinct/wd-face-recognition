@@ -7,7 +7,11 @@ wdf_session_start();
 require_once __DIR__ . '/paths.php';
 require_once __DIR__ . '/people_lib.php';
 
-$appDir = realpath(dirname(__DIR__));
+// Tests point the page at a stub app dir (issue #95), like the
+// WDF_PIN_FILE / WDF_WFI_CONFIG overrides.
+$appOverride = getenv('WDF_APP_DIR');
+$appDir = ($appOverride !== false && $appOverride !== '')
+    ? $appOverride : realpath(dirname(__DIR__));
 $configPath = wdf_wfi_config_path($appDir);
 
 $reportsDir = '/shares/facerecog-reports';
