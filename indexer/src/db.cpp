@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS faces(
   cluster_id INTEGER REFERENCES clusters(id)
 );
 CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
 CREATE TABLE IF NOT EXISTS clusters(
   id INTEGER PRIMARY KEY,
   name TEXT,
@@ -82,6 +83,9 @@ bool Db::open(const std::string& path, std::string& err) {
         return false;
     }
     sqlite3_busy_timeout(db_, 5000);
+    // Per connection (issue #48): without this, faces.photo_id's
+    // ON DELETE CASCADE is never enforced.
+    if (!exec("PRAGMA foreign_keys=ON", err)) return false;
     if (!exec(kSchema, err)) return false;
     // Face data is private (review #45): owner-only, even if an earlier
     // version created the file under a loose umask. Best-effort: a
@@ -91,6 +95,50 @@ bool Db::open(const std::string& path, std::string& err) {
 }
 
 void Db::set_busy_timeout(int ms) { sqlite3_busy_timeout(db_, ms); }
+
+bool Db::delete_photo(long id, std::vector<std::string>& crops,
+                      std::string& err) {
+    crops.clear();
+    // A pending scan batch must commit first (CodeRabbit #94): the delete
+    // would otherwise run inside the open batch and roll back with it if
+    // the batch's COMMIT later fails.
+    if (!flush()) {
+        err = "COMMIT of the pending scan batch failed";
+        return false;
+    }
+    // Faces cascade via foreign_keys=ON (issue #48). Their crop paths come
+    // back in crops for the caller to unlink AFTER the commit - the
+    // old_crops pattern from replace_faces: a failed delete must not leave
+    // files removed that the DB still references.
+    if (!exec("BEGIN IMMEDIATE", err)) return false;
+    bool ok = false;
+    do {
+        sqlite3_stmt* q = nullptr;
+        if (sqlite3_prepare_v2(db_, "SELECT crop_path FROM faces WHERE photo_id = ?",
+                               -1, &q, nullptr) != SQLITE_OK) break;
+        sqlite3_bind_int64(q, 1, id);
+        while (sqlite3_step(q) == SQLITE_ROW)
+            crops.emplace_back((const char*)sqlite3_column_text(q, 0));
+        sqlite3_finalize(q);
+
+        sqlite3_stmt* d = nullptr;
+        if (sqlite3_prepare_v2(db_, "DELETE FROM photos WHERE id = ?",
+                               -1, &d, nullptr) != SQLITE_OK) break;
+        sqlite3_bind_int64(d, 1, id);
+        ok = sqlite3_step(d) == SQLITE_DONE;
+        sqlite3_finalize(d);
+    } while (false);
+    if (ok) ok = exec("COMMIT", err);
+    if (!ok) {
+        // Capture the diagnostic before ROLLBACK overwrites it (as in
+        // replace_faces).
+        if (err.empty()) err = sqlite3_errmsg(db_);
+        std::string rb;
+        exec("ROLLBACK", rb);
+        crops.clear();  // nothing committed: nothing may be unlinked
+    }
+    return ok;
+}
 
 long Db::face_count(long photo_id) {
     (void)flush();
@@ -314,6 +362,21 @@ bool Db::replace_faces(long photo_id, int64_t size, int64_t mtime,
     if (!exec("BEGIN IMMEDIATE", err)) return false;
     bool ok = false;
     do {
+        // FK guard (CodeRabbit #94): with foreign_keys=ON, inserting a face
+        // for a deleted photo would abort with a constraint error. A photo
+        // deleted after queueing is a normal race (scan GC), so check for
+        // it here under the write lock and report a conflict instead.
+        sqlite3_stmt* p = nullptr;
+        if (sqlite3_prepare_v2(db_, "SELECT 1 FROM photos WHERE id = ?",
+                               -1, &p, nullptr) != SQLITE_OK) break;
+        sqlite3_bind_int64(p, 1, photo_id);
+        const bool photo_exists = sqlite3_step(p) == SQLITE_ROW;
+        sqlite3_finalize(p);
+        if (!photo_exists) {
+            conflict = true;
+            break;
+        }
+
         // Collect the old crop paths first: the caller unlinks them only
         // after this transaction commits, so a failed replace never leaves
         // the DB pointing at deleted files.

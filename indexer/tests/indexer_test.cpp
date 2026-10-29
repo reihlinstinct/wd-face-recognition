@@ -1138,6 +1138,66 @@ int main() {
         check(later_new, "cross-group tie: later group gets a fresh cluster");
     }
 
+    // PRAGMA foreign_keys (issue #48): deleting a photo cascades its
+    // faces. Without the per-connection pragma the face row would
+    // survive with a dangling photo_id and face_count would stay 1.
+    {
+        std::string tmp5 = tmp + "/fk";
+        std::string root5 = tmp5 + "/photos";
+        std::string data5 = tmp5 + "/data";
+        mkdir(tmp5.c_str(), 0777);
+        mkdir(root5.c_str(), 0777);
+        mkdir(data5.c_str(), 0777);
+        wfi::Db db5;
+        check(db5.open(data5 + "/index.db", err), "fk db opens");
+        write_file(root5 + "/k1.jpg", "k1");
+        long jobk = db5.begin_job(root5);
+        check(db5.observe(jobk, root5, root5 + "/k1.jpg", 2, 1000, err) == 1,
+              "fk photo queued");
+        check(db5.flush(), "fk batch committed");
+        std::vector<wfi::QueuedPhoto> kq;
+        check(db5.queued_photos(10, kq, err) && kq.size() == 1,
+              "fk queue readable");
+        wfi::FaceRow fr;
+        fr.bbox = "0,0,1,1";
+        fr.embedding = {1.0f, 0.0f, 0.0f};
+        fr.crop_path = "crops/k1_t1_f0.jpg";
+        std::vector<std::string> oldc;
+        bool conflict = true;
+        check(db5.replace_faces(kq[0].id, kq[0].size, kq[0].mtime, {fr},
+                                oldc, conflict, err) && !conflict,
+              "fk face committed");
+        check(db5.face_count(kq[0].id) == 1, "fk face counted");
+        std::vector<std::string> dfc;
+        check(db5.delete_photo(kq[0].id, dfc, err), "photo deleted");
+        check(dfc.size() == 1 && dfc[0] == "crops/k1_t1_f0.jpg",
+              "delete returns the crop paths for the caller to unlink");
+        check(db5.face_count(kq[0].id) == 0,
+              "faces cascade-deleted with the photo");
+        // CodeRabbit #94: replacing faces on a deleted photo must come
+        // back as a conflict (a normal GC race), not an FK abort.
+        std::vector<std::string> oldc2;
+        bool conflict2 = false;
+        check(!db5.replace_faces(kq[0].id, kq[0].size, kq[0].mtime, {fr},
+                                 oldc2, conflict2, err) && conflict2 &&
+                  oldc2.empty(),
+              "replace on a deleted photo is a conflict, not an FK error");
+        // CodeRabbit #94: cascade deletes and per-photo lookups use the
+        // idempotent idx_faces_photo index, created for existing DBs too.
+        sqlite3* raw5 = nullptr;
+        check(sqlite3_open((data5 + "/index.db").c_str(), &raw5) == SQLITE_OK,
+              "raw open for the index check");
+        sqlite3_stmt* ist = nullptr;
+        check(sqlite3_prepare_v2(raw5,
+                  "SELECT 1 FROM sqlite_master WHERE type='index'"
+                  " AND name='idx_faces_photo'",
+                  -1, &ist, nullptr) == SQLITE_OK,
+              "index query prepares");
+        check(sqlite3_step(ist) == SQLITE_ROW, "idx_faces_photo exists");
+        sqlite3_finalize(ist);
+        sqlite3_close(raw5);
+    }
+
     // JSON for the PHP pages (issue #50, PR 3c): escaping and shape.
     {
         check(wfi::json_escape("plain") == "plain", "plain text untouched");

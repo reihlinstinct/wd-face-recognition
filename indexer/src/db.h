@@ -89,6 +89,12 @@ public:
     // Face rows stored for one photo (-1 on error). Used by tests and the
     // people page.
     long face_count(long photo_id);
+    // Deletes one photo row; its faces cascade via foreign_keys=ON
+    // (issue #48). The deleted faces' crop paths come back in crops for
+    // the caller to unlink after the commit (same contract as
+    // replace_faces' old_crops); on failure crops is empty.
+    bool delete_photo(long id, std::vector<std::string>& crops,
+                      std::string& err);
     // Tests only: shorten the lock wait so the busy path is exercisable.
     void set_busy_timeout(int ms);
     // Atomically replaces a photo's face rows with the new set and marks
