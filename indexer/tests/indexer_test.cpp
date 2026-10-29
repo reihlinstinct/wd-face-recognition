@@ -768,6 +768,73 @@ int main() {
         check(wfi::scan_root(rdb, jobd, rroot, 8, cd, err), "changed walk");
         check(cd.changed == 1 && cd.restored == 0,
               "changed return re-queues");
+        check(rdb.queued_photos(100, aq, err) && aq.size() == 1,
+              "changed alice back in the queue");
+        {
+            std::vector<std::string> oc2;
+            bool cf2 = true;
+            check(rdb.replace_faces(aq[0].id, aq[0].size, aq[0].mtime, {fr},
+                                    oc2, cf2, err) && !cf2,
+                  "changed alice re-processed");
+        }
+
+        // A FAILED photo that goes missing and returns unchanged restores
+        // to 'failed' with its reason, not 'scanned' (reviewer #112 nit):
+        // the fail_reason CASE arm keeps the failure visible.
+        write_file(rroot + "/bob.jpg", "bob-bytes");
+        struct stat bst2;
+        check(stat((rroot + "/bob.jpg").c_str(), &bst2) == 0, "bob stat");
+        long jobe = rdb.begin_job(rroot);
+        check(rdb.observe(jobe, rroot, rroot + "/bob.jpg",
+                          (int64_t)bst2.st_size, (int64_t)bst2.st_mtime, err) == 1,
+              "bob queued");
+        check(rdb.flush(), "bob batch committed");
+        check(rdb.queued_photos(100, aq, err), "bob queue readable");
+        long bobid = 0;
+        for (const auto& qq : aq)
+            if (qq.path == rroot + "/bob.jpg") bobid = qq.id;
+        check(bobid > 0, "bob id resolved");
+        conflict = false;
+        check(rdb.mark_failed(bobid, bst2.st_size, bst2.st_mtime, "decode",
+                              conflict, err) && !conflict,
+              "bob marked failed");
+        check(unlink((rroot + "/bob.jpg").c_str()) == 0, "bob unlinked");
+        long jobf = rdb.begin_job(rroot);
+        wfi::ScanCounts cbf;
+        check(wfi::scan_root(rdb, jobf, rroot, 8, cbf, err), "bob-delete walk");
+        check(rdb.sweep_missing(jobf, rroot) == 1, "bob swept missing");
+        write_file(rroot + "/bob.jpg", "bob-bytes");
+        struct utimbuf bub;
+        bub.actime = bst2.st_atime;
+        bub.modtime = bst2.st_mtime;
+        check(utime((rroot + "/bob.jpg").c_str(), &bub) == 0,
+              "bob mtime restored");
+        long jobg = rdb.begin_job(rroot);
+        wfi::ScanCounts cg;
+        check(wfi::scan_root(rdb, jobg, rroot, 8, cg, err), "bob restore walk");
+        check(cg.restored == 1, "bob restored");
+        check(rdb.queued_photos(100, aq, err) && aq.empty(),
+              "failed restore does not re-queue");
+        {
+            sqlite3* raw = nullptr;
+            check(sqlite3_open((rdata + "/index.db").c_str(), &raw) == SQLITE_OK,
+                  "raw lifecycle connection opens");
+            sqlite3_stmt* st2 = nullptr;
+            check(sqlite3_prepare_v2(raw,
+                      "SELECT state, fail_reason FROM photos WHERE path = ?",
+                      -1, &st2, nullptr) == SQLITE_OK,
+                  "bob state query prepares");
+            sqlite3_bind_text(st2, 1, (rroot + "/bob.jpg").c_str(), -1,
+                              SQLITE_TRANSIENT);
+            check(sqlite3_step(st2) == SQLITE_ROW &&
+                      std::string((const char*)sqlite3_column_text(st2, 0)) ==
+                          "failed" &&
+                      std::string((const char*)sqlite3_column_text(st2, 1)) ==
+                          "decode",
+                  "failed photo restores to 'failed' with its reason");
+            sqlite3_finalize(st2);
+            sqlite3_close(raw);
+        }
         // rdb closes at scope end (destructor).
     }
 

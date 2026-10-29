@@ -178,6 +178,10 @@ claim - keyed by face row id - would find no face pointing at the
 named cluster and the person would go anonymous (demonstrated by the
 reviewer with the real binary). A return with changed size or mtime
 re-queues through the normal `missing -> changed` path as before.
+Change detection is size+mtime at the filesystem's timestamp
+resolution (pre-existing limit): a same-second, same-size content
+swap is invisible to the walk and restores as unchanged, keeping its
+previous face data.
 
 ## Apply-time semantics
 
