@@ -9,7 +9,7 @@ permissions:
   contents: read
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -29,7 +29,7 @@ jobs:
             echo "no shell scripts yet - skipping"
           fi
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -46,7 +46,7 @@ jobs:
       - run: python -m pytest -q --cov=src --cov-report=term --cov-fail-under=80
   demo-scan-test:
     # Recursive scanner unit tests (issue #24): no ncnn needed, plain g++.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: g++ -std=c++17 -O2 -Wall -Wextra demo/tests/scan_test.cpp demo/src/scan.cpp -o /tmp/scan_test
@@ -94,7 +94,7 @@ jobs:
         run: sh apkg/tests/preinst_test.sh
   indexer-test:
     # wdf_indexer skeleton (issue #40): mtime-delta walk + SQLite index.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -126,7 +126,7 @@ jobs:
         run: python3 indexer/tests/test_faces_cli.py /tmp/wdf_faces_cli
 
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -137,7 +137,7 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: bandit -r src -ll
   secret-scan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -11,7 +11,7 @@ permissions:
 jobs:
   wdf-demo:
     name: Build + smoke-test wdf_demo (issue #18)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: debian:11
       options: --memory=4g --cpus=2

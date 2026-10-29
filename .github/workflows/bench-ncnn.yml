@@ -11,7 +11,7 @@ permissions:
 jobs:
   ncnn-spike:
     name: ncnn pipeline spike (issue #3)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container:
       image: debian:11
       options: --memory=4g --cpus=2
