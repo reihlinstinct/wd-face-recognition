@@ -1375,6 +1375,37 @@ int main() {
                   "legacy content truncated on clean acquire");
             close(rf);
         }
+        // Comm check pins (reviewer): a live FOREIGN process named by
+        // the legacy PID must NOT block the acquire (pid reuse is not a
+        // legacy holder), and garbage non-numeric content is truncated
+        // and ignored.
+        const pid_t foreign = fork();
+        if (foreign == 0) { sleep(30); _exit(0); }  // comm: "wfi_test"
+        check(foreign > 0, "foreign process forked");
+        const std::string foreignp = tmp + "/foreign.lock";
+        {
+            const int wf = open(foreignp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            check(wf >= 0 && dprintf(wf, "%d\n", foreign) > 0 && close(wf) == 0,
+                  "foreign pid file written");
+        }
+        {
+            wfi::InstanceLock fl;
+            check(fl.acquire(foreignp, err),
+                  "live foreign process at the legacy pid does not block");
+        }
+        kill(foreign, SIGKILL);
+        check(waitpid(foreign, &st, 0) == foreign, "foreign process reaped");
+        const std::string garbagep = tmp + "/garbage.lock";
+        {
+            const int wf = open(garbagep.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            check(wf >= 0 && write(wf, "not-a-pid\n", 10) == 10 && close(wf) == 0,
+                  "garbage lock written");
+        }
+        {
+            wfi::InstanceLock gl;
+            check(gl.acquire(garbagep, err),
+                  "garbage content truncated and ignored");
+        }
         close(to_child[1]);
         close(to_parent[0]);
         wfi::InstanceLock l5;
