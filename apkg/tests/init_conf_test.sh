@@ -9,7 +9,10 @@ set -u
 fails=0
 bad() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d)" || { echo 'mktemp failed' >&2; exit 1; }
+# An empty WORK would put fixtures under /case1 and neuter the trap
+# (review #91).
+[ -n "$WORK" ] && [ -d "$WORK" ] || { echo 'bad scratch dir' >&2; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,9 +28,13 @@ setup() { # fresh fake app dir inside $WORK; sets APP and PERSIST
 	# Redirect the web path and the log into the sandbox (issue #90):
 	# an unmodified copy points at the host's /var/www and /tmp log.
 	sed -i "s|^APP_WEB_PATH=.*|APP_WEB_PATH=\"$D/www\"|" \
-		"$D/apps/wd-face-recognition/helpers.sh"
+		"$D/apps/wd-face-recognition/helpers.sh" \
+		|| { echo 'sandbox rewrite failed: APP_WEB_PATH' >&2; exit 1; }
 	sed -i "s|^LOG=.*|LOG=\"$D/debug_apkg\"|" \
-		"$D/apps/wd-face-recognition/helpers.sh"
+		"$D/apps/wd-face-recognition/helpers.sh" \
+		|| { echo 'sandbox rewrite failed: LOG' >&2; exit 1; }
+	grep -q "APP_WEB_PATH=\"$D/www\"" "$D/apps/wd-face-recognition/helpers.sh" \
+		|| { echo 'sandbox rewrite did not land' >&2; exit 1; }
 	APP="$D/apps/wd-face-recognition"
 	PERSIST="$D/apps/wd-face-recognition_conf"
 }
