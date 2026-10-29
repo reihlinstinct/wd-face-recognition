@@ -1,6 +1,7 @@
 #include "db.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <set>
@@ -82,6 +83,9 @@ bool Db::open(const std::string& path, std::string& err) {
         return false;
     }
     sqlite3_busy_timeout(db_, 5000);
+    // Per connection (issue #48): without this, faces.photo_id's
+    // ON DELETE CASCADE is never enforced.
+    if (!exec("PRAGMA foreign_keys=ON", err)) return false;
     if (!exec(kSchema, err)) return false;
     // Face data is private (review #45): owner-only, even if an earlier
     // version created the file under a loose umask. Best-effort: a
@@ -91,6 +95,14 @@ bool Db::open(const std::string& path, std::string& err) {
 }
 
 void Db::set_busy_timeout(int ms) { sqlite3_busy_timeout(db_, ms); }
+
+bool Db::delete_photo(long id, std::string& err) {
+    // Faces and their crop references cascade via foreign_keys=ON
+    // (issue #48); callers remove crop FILES themselves.
+    char sql[96];
+    std::snprintf(sql, sizeof(sql), "DELETE FROM photos WHERE id = %ld", id);
+    return exec(sql, err);
+}
 
 long Db::face_count(long photo_id) {
     (void)flush();

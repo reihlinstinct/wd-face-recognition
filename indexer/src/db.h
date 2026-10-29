@@ -89,6 +89,9 @@ public:
     // Face rows stored for one photo (-1 on error). Used by tests and the
     // people page.
     long face_count(long photo_id);
+    // Deletes one photo row; its faces cascade via foreign_keys=ON
+    // (issue #48). Callers remove crop files themselves.
+    bool delete_photo(long id, std::string& err);
     // Tests only: shorten the lock wait so the busy path is exercisable.
     void set_busy_timeout(int ms);
     // Atomically replaces a photo's face rows with the new set and marks
