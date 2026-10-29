@@ -108,10 +108,12 @@ grep -q '^roots=$' "$PERSIST/wfi.conf" || bad 'recovery wrote the default config
 setup
 mkdir -p "$PERSIST"
 mkdir "$PERSIST/wfi.conf"
+touch "$PERSIST/wfi.conf/sentinel"
 sh "$APP/init.sh" "$APP" >/dev/null 2>&1
 rc=$?
 [ "$rc" -eq 1 ] || bad "dir at conf path: init.sh exits 1 (got $rc)"
 [ -d "$PERSIST/wfi.conf" ] || bad 'dir at conf path: directory untouched'
+[ -f "$PERSIST/wfi.conf/sentinel" ] || bad 'dir at conf path: original directory preserved'
 
 # --- no stray temp dirs: the trap removes $WORK, checked by the caller ----
 if [ "$fails" -gt 0 ]; then
