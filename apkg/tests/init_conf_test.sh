@@ -104,6 +104,17 @@ rc=$?
 [ "$rc" -eq 0 ] || bad 'next run recovers'
 grep -q '^roots=$' "$PERSIST/wfi.conf" || bad 'recovery wrote the default config'
 
+# --- case 6: a directory at the conf path aborts (review #91 note) --------
+setup
+mkdir -p "$PERSIST"
+mkdir "$PERSIST/wfi.conf"
+touch "$PERSIST/wfi.conf/sentinel"
+sh "$APP/init.sh" "$APP" >/dev/null 2>&1
+rc=$?
+[ "$rc" -eq 1 ] || bad "dir at conf path: init.sh exits 1 (got $rc)"
+[ -d "$PERSIST/wfi.conf" ] || bad 'dir at conf path: directory untouched'
+[ -f "$PERSIST/wfi.conf/sentinel" ] || bad 'dir at conf path: original directory preserved'
+
 # --- no stray temp dirs: the trap removes $WORK, checked by the caller ----
 if [ "$fails" -gt 0 ]; then
 	echo "$fails check(s) failed" >&2
