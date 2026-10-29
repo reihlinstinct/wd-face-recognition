@@ -13,7 +13,7 @@
    "path": ".github/workflows/bench-ncnn.yml",
    "rule": "unhashed-pip-install",
    "scope": "dependencies",
-   "evidence": "python3 -m pip install --no-cache-dir pillow onnx-simplifier==0.4.36",
+   "evidence": "pip install --no-cache-dir pillow onnx-simplifier==0.4.36",
    "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
    "reason": "Pre-existing pip install without --require-hashes; resolves unhashed dependencies; tracked for hash pinning in this issue."
   },
@@ -21,7 +21,7 @@
    "path": ".github/workflows/bench.yml",
    "rule": "unhashed-pip-install",
    "scope": "dependencies",
-   "evidence": "python3 -m pip install --no-cache-dir pillow",
+   "evidence": "pip install --no-cache-dir pillow",
    "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
    "reason": "Pre-existing pip install without --require-hashes; resolves unhashed dependencies; tracked for hash pinning in this issue."
   },
@@ -37,7 +37,7 @@
    "path": ".github/workflows/demo.yml",
    "rule": "unhashed-pip-install",
    "scope": "dependencies",
-   "evidence": "python3 -m pip install --no-cache-dir pillow onnx-simplifier==0.4.36 pnnx==20261020",
+   "evidence": "pip install --no-cache-dir pillow onnx-simplifier==0.4.36 pnnx==20261020",
    "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
    "reason": "Pre-existing pip install without --require-hashes; resolves unhashed dependencies; tracked for hash pinning in this issue."
   },
@@ -45,7 +45,7 @@
    "path": ".github/workflows/package.yml",
    "rule": "unhashed-pip-install",
    "scope": "dependencies",
-   "evidence": "python3 -m pip install --no-cache-dir onnx-simplifier==0.4.36",
+   "evidence": "pip install --no-cache-dir onnx-simplifier==0.4.36",
    "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
    "reason": "Pre-existing pip install without --require-hashes; resolves unhashed dependencies; tracked for hash pinning in this issue."
   },
