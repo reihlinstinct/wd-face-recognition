@@ -1,0 +1,65 @@
+# Roots settings page (issue #102)
+
+The owner sets which shares/folders the indexer scans by editing
+`roots=` in `wfi.conf`. Today that means SMB file access; this page
+moves it into the dashboard, next to the output-folder setting.
+
+## Decisions (owner-approved 2026-10-29)
+
+- **A settings page, not the dashboard file manager.** The file
+  manager edits bytes; the page can validate, normalize, and persist
+  atomically, and it reuses the app's existing PIN+CSRF mutation
+  contract.
+- **The empty default stays.** Privacy first (#56): a fresh install
+  scans nothing until the owner adds a root.
+
+## UI
+
+A "Scan roots" section on the existing settings page
+(`apkg/web/settings.php`): a textarea, one absolute path per line,
+prefilled from the live `wfi.conf`. Save goes through the same
+mutation contract as `people.php`: PIN or remembered session,
+per-session CSRF token, PRG so a refresh never repeats the write.
+
+## Validation (every line)
+
+1. Absolute path under `/shares/`.
+2. No `..` component.
+3. Symlink components only at the share level
+   (`wdf_path_symlink_components_ok`), and the resolved path stays
+   under the shares' real roots
+   (`wdf_real_path_under_roots` + `wdf_shares_real_roots`).
+4. Must EXIST and be a real directory. Unlike the output folder (a
+   future state the app creates), a scan root that does not exist is
+   a typo.
+5. A share ROOT is allowed. The subfolder-only rule for the output
+   folder exists because runs replace its contents; scanning a share
+   root is the normal case and wipes nothing.
+6. Dedupe; at most 16 roots; at most 512 bytes per path.
+7. The empty list is valid - it is the shipped default (the indexer
+   scans nothing).
+
+## Persistence
+
+Rewrite only the `roots=` line; every other line of `wfi.conf` is
+preserved verbatim, and a missing line is appended. The write is
+atomic: `wfi.conf.tmp.<pid>` in the same directory, `fflush` +
+`fsync`, then `rename()` over `wfi.conf` - the pattern `init.sh`
+already uses and `apkg/tests/init_conf_test.sh` pins.
+
+## Rejected alternatives
+
+- **Tell the owner to edit wfi.conf in the dashboard file manager:**
+  no validation, no atomic write, typo bricks the scan silently.
+- **Free-text roots without existence checks:** a typo indexes
+  nothing and looks identical to "no faces found".
+
+## Tests
+
+- `settings_test.php`-style unit cases: traversal (`..`), path
+  outside `/shares/`, symlink escaping the share, nonexistent
+  directory, valid share root, dedupe, count/length caps, empty list.
+- Atomic write: saved file content exact, no temp file left behind.
+- A `people_post`-style handler test: POST roots through the real
+  page (child process) and assert the resulting `wfi.conf`.
+- `DEVICE-TEST.md` gains the roots-editing step.
