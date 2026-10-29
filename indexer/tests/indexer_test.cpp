@@ -1168,9 +1168,34 @@ int main() {
                                 oldc, conflict, err) && !conflict,
               "fk face committed");
         check(db5.face_count(kq[0].id) == 1, "fk face counted");
-        check(db5.delete_photo(kq[0].id, err), "photo deleted");
+        std::vector<std::string> dfc;
+        check(db5.delete_photo(kq[0].id, dfc, err), "photo deleted");
+        check(dfc.size() == 1 && dfc[0] == "crops/k1_t1_f0.jpg",
+              "delete returns the crop paths for the caller to unlink");
         check(db5.face_count(kq[0].id) == 0,
               "faces cascade-deleted with the photo");
+        // CodeRabbit #94: replacing faces on a deleted photo must come
+        // back as a conflict (a normal GC race), not an FK abort.
+        std::vector<std::string> oldc2;
+        bool conflict2 = false;
+        check(!db5.replace_faces(kq[0].id, kq[0].size, kq[0].mtime, {fr},
+                                 oldc2, conflict2, err) && conflict2 &&
+                  oldc2.empty(),
+              "replace on a deleted photo is a conflict, not an FK error");
+        // CodeRabbit #94: cascade deletes and per-photo lookups use the
+        // idempotent idx_faces_photo index, created for existing DBs too.
+        sqlite3* raw5 = nullptr;
+        check(sqlite3_open((data5 + "/index.db").c_str(), &raw5) == SQLITE_OK,
+              "raw open for the index check");
+        sqlite3_stmt* ist = nullptr;
+        check(sqlite3_prepare_v2(raw5,
+                  "SELECT 1 FROM sqlite_master WHERE type='index'"
+                  " AND name='idx_faces_photo'",
+                  -1, &ist, nullptr) == SQLITE_OK,
+              "index query prepares");
+        check(sqlite3_step(ist) == SQLITE_ROW, "idx_faces_photo exists");
+        sqlite3_finalize(ist);
+        sqlite3_close(raw5);
     }
 
     // JSON for the PHP pages (issue #50, PR 3c): escaping and shape.
