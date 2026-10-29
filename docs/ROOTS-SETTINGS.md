@@ -44,8 +44,15 @@ rejected) and capped at 16 roots.
 6. No commas in a path: `roots=` is comma-separated, so a comma
    would silently split one root into two.
 7. Dedupe; at most 16 roots; at most 512 bytes per path.
-8. The empty list is valid - it is the shipped default (the indexer
-   scans nothing).
+8. The empty list is valid - it is the shipped default (see "Empty
+   roots contract" below).
+9. No overlapping roots. After each line is canonicalized (the real
+   path the symlink/`.`-resolution helpers produce), a root that is an
+   ancestor or descendant of another listed root is rejected: the
+   indexer would walk the nested tree twice per scan, and the
+   duplicate observation paths would confuse the per-root missing
+   sweep. Exact duplicates collapse under dedupe (rule 7) before this
+   check runs.
 
 ## Persistence
 
@@ -62,6 +69,36 @@ file and detach the app from its persistent config. A test pins the
 symlink surviving a save. `init.sh` already uses the temp + `mv` half
 of this pattern (pinned by `apkg/tests/init_conf_test.sh`); the page
 adds the `fsync` before the rename.
+
+## Empty roots contract
+
+The empty list must be a SUCCESSFUL no-op everywhere, not an error: a
+fresh install ships with no roots (privacy first, #56), and erroring
+on the shipped default would brick every new install's first run.
+Today `load_config` FAILS on an empty list ("config has no roots=")
+and the indexer/`wdf_faces` entry points exit nonzero - the
+implementation PR changes that: `load_config` accepts zero roots,
+`wdf_indexer` prints "no roots configured - nothing to scan" and exits
+0, and `wdf_faces` mutating commands report nothing to do and exit 0
+(read commands are unaffected). A contract test pins this end to end:
+empty `roots=` -> both binaries succeed, the DB gains no photos, and
+stderr carries no error.
+
+## Root removal semantics
+
+`sweep_missing` runs per CONFIGURED root, so today a root deleted from
+`roots=` is never walked and never swept: its photos stay `scanned`
+forever, and their faces keep feeding people identities - stale
+clusters and missed missing-file sweeps (CodeRabbit #103). The
+implementation PR closes this in the indexer: after sweeping each
+configured root, `wdf_indexer` also sweeps every DISTINCT `root`
+stored in `photos` that is no longer configured. Such a sweep needs no
+walk: nothing under that root was observed in this job, so every one
+of its photos is marked `missing`, its faces stop feeding identity
+rebuilds, and re-adding the root later re-queues them through the
+normal `missing -> changed` path. Coverage: a two-scan test (scan with
+the root, rescan without it) asserts the photos flip to `missing` and
+a third scan with the root re-added restores them.
 
 ## Apply-time semantics
 
@@ -86,4 +123,9 @@ sees either the old config or the new one, never a mix.
 - Atomic write: saved file content exact, no temp file left behind.
 - A `people_post`-style handler test: POST roots through the real
   page (child process) and assert the resulting `wfi.conf`.
+- Overlap rejection: ancestor/descendant pairs rejected after
+  canonicalization (incl. through a share-level symlink).
+- Empty-roots contract test: both binaries succeed on zero roots.
+- Root removal: photos under a removed root flip to `missing` on the
+  next scan and recover when the root is re-added.
 - `DEVICE-TEST.md` gains the roots-editing step.
