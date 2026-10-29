@@ -108,12 +108,15 @@ def main():
     with open(cleared, "w") as f:
         f.write(f"roots=\ndata_dir={data}\n")
     before = dict(db.execute("SELECT path, state FROM photos").fetchall())
+    jobs_before = db.execute("SELECT COUNT(*) FROM scan_jobs").fetchone()[0]
     r = subprocess.run([bin_path, "scan", "--config", cleared],
                        capture_output=True, text=True)
     assert r.returncode == 0, f"cleared-roots scan failed: {r.stderr}"
     assert "no roots configured" in r.stdout, r.stdout
     after = dict(db.execute("SELECT path, state FROM photos").fetchall())
     assert after == before, (before, after)
+    jobs_after = db.execute("SELECT COUNT(*) FROM scan_jobs").fetchone()[0]
+    assert jobs_after == jobs_before, (jobs_before, jobs_after)
 
     print("test_indexer: all assertions passed")
 
