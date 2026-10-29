@@ -141,9 +141,13 @@ configured roots (ancestor/descendant, canonicalized - the rule-9
 relation) is swept under the run's shared job only when EVERY
 overlapping configured root's walk completed this run; any incomplete
 overlapping walk skips that sweep. Canonicalization resolves the
-longest EXISTING prefix and appends the cleaned tail, so a
-temporarily missing (unmounted) root and an existing symlinked
-neighbour compare in one consistent form (CodeRabbit #112). The
+longest EXISTING prefix and folds the unresolved tail onto the
+canonical base, so a temporarily missing (unmounted) root and an
+existing symlinked neighbour compare in one consistent form
+(CodeRabbit #112). `..` is resolved in kernel order - against the
+RESOLVED parent, never lexically - because a hand-edited wfi.conf can
+carry it (the UI rejects `..`): `/shares/link/../Photos` where link is
+a symlink is not `/shares/Photos` (CodeRabbit #112). The
 "is this stored root still configured" check is EXACT TEXT, not
 canonical: `sweep_missing` matches on the root column's text, so a
 trailing-slash config edit must not skip the old rows (CodeRabbit

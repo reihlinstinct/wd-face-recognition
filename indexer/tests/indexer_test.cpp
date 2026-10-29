@@ -101,6 +101,20 @@ int main() {
     check(wfi::roots_overlap(wfi::canonical_root(tmp + "/link/sub/missing"),
                              wfi::canonical_root(tmp + "/storage/sub")),
           "unmounted child still overlaps the resolved parent");
+    // ".." resolves in KERNEL order - against the RESOLVED parent, not
+    // lexically (CodeRabbit #112 major 3): link2 -> storage/inner means
+    // link2/../sibling is storage/sibling, never tmp/sibling. The UI
+    // rejects ".." but a hand-edited wfi.conf can carry it.
+    check(mkdir((tmp + "/storage/inner").c_str(), 0700) == 0, "inner dir");
+    check(mkdir((tmp + "/storage/sibling").c_str(), 0700) == 0, "sibling dir");
+    check(symlink((tmp + "/storage/inner").c_str(),
+                  (tmp + "/link2").c_str()) == 0, "second symlink created");
+    check(wfi::canonical_root(tmp + "/link2/../sibling/missing") ==
+              tmp + "/storage/sibling/missing",
+          "dotdot resolves through the symlinked parent");
+    check(wfi::roots_overlap(wfi::canonical_root(tmp + "/link2/../sibling/missing"),
+                             wfi::canonical_root(tmp + "/storage/sibling")),
+          "dotdot canonical forms overlap correctly");
 
     // First scan: two JPEGs queued (txt ignored).
     long job1 = db.begin_job(root);
