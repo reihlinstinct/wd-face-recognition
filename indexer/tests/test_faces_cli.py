@@ -304,6 +304,11 @@ check(all(p["id"] != second_id for p in people),
 kept = [p for p in people if p["id"] == keep_id]
 check(kept and kept[0]["faces"] == 2,
       "empty-roots merge moved the face to the target")
+r = run("person", "--config", econf, "--id", str(keep_id))
+person = json.loads(r.stdout) if r.returncode == 0 else {}
+crops = {f.get("crop") for f in person.get("faces", [])}
+check(r.returncode == 0 and crops == {"crops/seed.jpg", "crops/seed2.jpg"},
+      "the actual moved crop is listed under the target")
 
 if fails:
     print(f"test_faces_cli: {fails} FAILURES", file=sys.stderr)
