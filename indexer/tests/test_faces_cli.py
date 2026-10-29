@@ -168,6 +168,27 @@ r = run("cluster", "--config", conf)
 check(r.returncode == 0 and r.stdout.strip() ==
       "faces=1 people=1 singletons=1", "cluster counts line")
 
+# Instance lock (issue #46): with a live PID in data_dir/wdf.lock, a
+# mutating command exits politely while the read commands stay usable.
+lock_path = os.path.join(data, "wdf.lock")
+with open(lock_path, "w") as f:
+    f.write(f"{os.getpid()}\n")
+r = run("process", "--config", conf)
+check(r.returncode == 1 and "already running" in r.stderr,
+      "second process run refused politely")
+r = run("rename", "--config", conf, "--id", str(keep_id), "--name", "X")
+check(r.returncode == 1 and "already running" in r.stderr,
+      "rename under a live lock refused")
+r = run("people", "--config", conf)
+check("already running" not in r.stderr, "read command stays lock-free")
+# A stale lockfile (dead PID) is reclaimed by the next mutating run.
+with open(lock_path, "w") as f:
+    f.write("999999\n")
+r = run("cluster", "--config", conf)
+check(r.returncode == 0 and "already running" not in r.stderr,
+      "stale lockfile reclaimed")
+check(not os.path.exists(lock_path), "lockfile released at exit")
+
 if fails:
     print(f"test_faces_cli: {fails} FAILURES", file=sys.stderr)
     sys.exit(1)

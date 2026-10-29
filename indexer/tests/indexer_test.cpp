@@ -11,6 +11,7 @@
 #include <set>
 #include <string>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
 #include <utime.h>
@@ -18,6 +19,7 @@
 
 #include "../src/config.h"
 #include "../src/cropreserve.h"
+#include "../src/lockfile.h"
 #include "../src/db.h"
 #include "../src/people.h"
 #include "../src/walk.h"
@@ -1196,6 +1198,72 @@ int main() {
         check(sqlite3_step(ist) == SQLITE_ROW, "idx_faces_photo exists");
         sqlite3_finalize(ist);
         sqlite3_close(raw5);
+    }
+
+    // Instance lock (issue #46): a second holder is refused politely, the
+    // lockfile leaves with its holder, and a stale lockfile (dead PID) is
+    // reclaimed with the new holder's PID written in.
+    {
+        const std::string lockp = tmp + "/wdf.lock";
+        {
+            wfi::InstanceLock l1;
+            check(l1.acquire(lockp, err), "first instance takes the lock");
+            wfi::InstanceLock l2;
+            check(!l2.acquire(lockp, err) &&
+                      err.find("already running") != std::string::npos,
+                  "second instance refused politely");
+        }
+        check(access(lockp.c_str(), F_OK) != 0,
+              "lockfile released with the holder");
+        // fork+wait gives a PID that is certainly dead afterwards.
+        const pid_t dead = fork();
+        if (dead == 0) _exit(0);
+        check(dead > 0 && waitpid(dead, nullptr, 0) == dead,
+              "dead pid available for the stale-lock test");
+        const std::string stale = std::to_string((long)dead) + "\n";
+        const int lfd = open(lockp.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+        check(lfd >= 0 && write(lfd, stale.c_str(), stale.size()) ==
+                                 (ssize_t)stale.size(),
+              "stale lockfile planted");
+        if (lfd >= 0) close(lfd);
+        wfi::InstanceLock l3;
+        check(l3.acquire(lockp, err), "stale lockfile reclaimed");
+        char buf[32] = {0};
+        const int rfd = open(lockp.c_str(), O_RDONLY);
+        check(rfd >= 0 && read(rfd, buf, sizeof(buf) - 1) > 0 &&
+                  std::strtol(buf, nullptr, 10) == (long)getpid(),
+              "reclaimed lock holds the new owner's pid");
+        if (rfd >= 0) close(rfd);
+        // CodeRabbit #97: the holder PID lands complete (temp+link), and
+        // the temp file never survives.
+        const std::string want = std::to_string((long)getpid()) + "\n";
+        check(buf == want, "lockfile content is exactly the holder pid");
+        check(access((lockp + ".tmp." + std::to_string((long)getpid())).c_str(),
+                     F_OK) != 0,
+              "no temp lockfile left behind");
+        // A numeric prefix with trailing junk is NOT a live holder: with
+        // only a strtol prefix parse this file would name our own live
+        // pid and block every later instance.
+        {
+            const std::string junk = want.substr(0, want.size() - 1) + "junk\n";
+            const int jfd = open(lockp.c_str(), O_WRONLY | O_TRUNC);
+            check(jfd >= 0 && write(jfd, junk.c_str(), junk.size()) ==
+                                     (ssize_t)junk.size(),
+                  "junk-suffix lockfile planted");
+            if (jfd >= 0) close(jfd);
+            wfi::InstanceLock l4;
+            check(l4.acquire(lockp, err),
+                  "junk suffix is not a live pid (reclaimed)");
+        }
+        // An empty lockfile (a legacy or crashed writer) is stale too.
+        {
+            wfi::InstanceLock l5;
+            check(l5.acquire(lockp, err), "lock re-acquired after release");
+            const int efd = open(lockp.c_str(), O_WRONLY | O_TRUNC);
+            if (efd >= 0) close(efd);  // l5 still "holds" it; dropped below
+            wfi::InstanceLock l6;
+            check(l6.acquire(lockp, err), "empty lockfile reclaimed");
+        }
     }
 
     // JSON for the PHP pages (issue #50, PR 3c): escaping and shape.

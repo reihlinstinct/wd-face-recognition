@@ -104,15 +104,15 @@ jobs:
           gcc -O2 -c indexer/third_party/sqlite3.c -o /tmp/sqlite3.o
           g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
             indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \
-            indexer/src/cropreserve.cpp indexer/src/people.cpp \
+            indexer/src/cropreserve.cpp indexer/src/people.cpp indexer/src/lockfile.cpp \
             pipeline/src/cluster.cpp -I pipeline/src \
             indexer/tests/indexer_test.cpp /tmp/sqlite3.o -lpthread -ldl -o /tmp/wfi_test
           g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
             indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \
-            indexer/src/main.cpp /tmp/sqlite3.o -lpthread -ldl -o /tmp/wdf_indexer
+            indexer/src/main.cpp indexer/src/lockfile.cpp /tmp/sqlite3.o -lpthread -ldl -o /tmp/wdf_indexer
           g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
             indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \
-            indexer/src/cropreserve.cpp indexer/src/people.cpp \
+            indexer/src/cropreserve.cpp indexer/src/people.cpp indexer/src/lockfile.cpp \
             pipeline/src/cluster.cpp -I pipeline/src -I indexer/src \
             indexer/src/faces_main.cpp indexer/tests/process_stub.cpp \
             /tmp/sqlite3.o -lpthread -ldl -o /tmp/wdf_faces_cli
