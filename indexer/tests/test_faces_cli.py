@@ -237,12 +237,18 @@ check(r.returncode == 0 and "already running" not in r.stderr,
 # named on stderr, and fails the run.
 with open(os.path.join(crops, "stuck.jpg"), "w") as f:
     f.write("x")
-os.chmod(crops, 0o555)
-r = run("gc", "--config", conf)
-os.chmod(crops, 0o755)
-check(r.returncode == 1 and "failed=1" in r.stdout and
-      "stuck.jpg" in r.stderr, "failed unlink counted and named")
-os.remove(os.path.join(crops, "stuck.jpg"))
+if os.geteuid() == 0:
+    # chmod does not stop root's unlink (review #101).
+    pass
+else:
+    try:
+        os.chmod(crops, 0o555)
+        r = run("gc", "--config", conf)
+    finally:
+        os.chmod(crops, 0o755)
+    check(r.returncode == 1 and "failed=1" in r.stdout and
+          "stuck.jpg" in r.stderr, "failed unlink counted and named")
+    os.remove(os.path.join(crops, "stuck.jpg"))
 
 if fails:
     print(f"test_faces_cli: {fails} FAILURES", file=sys.stderr)

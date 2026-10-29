@@ -1261,7 +1261,6 @@ int main() {
         check(pipe(to_child) == 0 && pipe(to_parent) == 0,
               "contention pipes created");
         const pid_t kid = fork();
-        check(kid > 0, "contention child forked");
         if (kid == 0) {
             close(to_child[1]);
             close(to_parent[0]);
@@ -1274,6 +1273,9 @@ int main() {
         }
         close(to_child[0]);
         close(to_parent[1]);
+        // Parent only (review #101): in the child fork() returns 0, and a
+        // check there would print a spurious FAIL on green runs.
+        check(kid > 0, "contention child forked");
         char go = 0;
         check(read(to_parent[0], &go, 1) == 1 && go == '1',
               "child holds the lock");

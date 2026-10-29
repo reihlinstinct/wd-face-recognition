@@ -16,7 +16,10 @@ bool InstanceLock::acquire(const std::string& path, std::string& err) {
     // flock(2) (issue #98): the lock belongs to the open file
     // description and the kernel drops it on ANY exit, crash included -
     // no stale-PID detection, reclamation, or temp files to get wrong.
-    const int fd = open(path.c_str(), O_RDWR | O_CREAT, 0600);
+    // O_CLOEXEC: a child process must not inherit a share of the lock.
+    // Note: flock semantics weaken on NFS/SMB mounts; data_dir lives on
+    // the NAS's local volume, where they are solid.
+    const int fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     if (fd < 0) {
         err = "cannot open the lockfile " + path + ": " +
               std::strerror(errno);
