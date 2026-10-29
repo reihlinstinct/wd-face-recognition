@@ -134,9 +134,14 @@ int main(int argc, char** argv) {
     }
     for (const std::string& r : stored) {
         const std::string cr = wfi::canonical_root(r);
+        // "Already handled above" is an EXACT-TEXT check (CodeRabbit #112
+        // major 2): sweep_missing matches on the root column's text, so a
+        // stored root that is only CANONICALLY equal to a configured root
+        // (a trailing-slash edit, say) was never swept by the configured
+        // pass and belongs to the unconfigured sweep below.
         bool configured = false;
-        for (const std::string& ca : roots_all) {
-            if (ca == cr) { configured = true; break; }
+        for (const std::string& cfg_root : cfg.roots) {
+            if (cfg_root == r) { configured = true; break; }
         }
         if (configured) continue;  // swept (or deliberately skipped) above
         bool gate_ok = true;

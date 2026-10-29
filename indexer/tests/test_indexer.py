@@ -180,6 +180,66 @@ def main():
         assert "INCOMPLETE" not in out, out
     ndb.close()
 
+    # Unconfigured-sweep gate through a symlinked share (CodeRabbit #112
+    # major 1): the stored parent root resolves via the symlink while the
+    # configured child is missing - only longest-existing-prefix
+    # canonicalization keeps the ancestor relation, so the incomplete
+    # child walk must still suppress the parent sweep.
+    sym = os.path.join(tmp, "sym")
+    storage = os.path.join(sym, "storage")
+    os.makedirs(os.path.join(storage, "Album", "2020"))
+    os.symlink(storage, os.path.join(sym, "shares"))
+    lshare = os.path.join(sym, "shares", "Album")
+    sdata = os.path.join(sym, "data")
+    os.makedirs(sdata)
+    with open(os.path.join(storage, "Album", "top.jpg"), "w") as f:
+        f.write("x")
+    with open(os.path.join(storage, "Album", "2020", "s.jpg"), "w") as f:
+        f.write("x")
+    sconf = os.path.join(sym, "wfi.conf")
+    with open(sconf, "w") as f:
+        f.write(f"roots={lshare}\ndata_dir={sdata}\n")
+    run(bin_path, sconf)  # indexed under the symlink-spelled root
+    # Narrow to the child, then the child's dir vanishes (unmounted):
+    # the child walk is incomplete, so the stored parent must NOT sweep.
+    child = os.path.join(lshare, "2020")
+    os.rename(os.path.join(storage, "Album", "2020"),
+              os.path.join(storage, "Album", "2020-away"))
+    with open(sconf, "w") as f:
+        f.write(f"roots={child}\ndata_dir={sdata}\n")
+    out = run(bin_path, sconf)
+    assert "INCOMPLETE (unreadable dir)" in out, out
+    assert "(unconfigured) sweep suppressed" in out, out
+    sdb = sqlite3.connect(os.path.join(sdata, "index.db"))
+    states = dict(sdb.execute("SELECT path, state FROM photos").fetchall())
+    assert all(st == "queued" for st in states.values()), states
+    sdb.close()
+
+    # Stored-root TEXT vs configured text (CodeRabbit #112 major 2): the
+    # "already configured" check is exact text - sweep_missing matches on
+    # the root column's text - so a trailing-slash edit must not skip
+    # sweeping the old rows.
+    ts = os.path.join(tmp, "tslash")
+    tphotos = os.path.join(ts, "Photos")
+    tdata = os.path.join(ts, "data")
+    os.makedirs(tphotos)
+    os.makedirs(tdata)
+    with open(os.path.join(tphotos, "t.jpg"), "w") as f:
+        f.write("x")
+    tconf = os.path.join(ts, "wfi.conf")
+    with open(tconf, "w") as f:
+        f.write(f"roots={tphotos}/\ndata_dir={tdata}\n")  # trailing slash
+    run(bin_path, tconf)
+    with open(tconf, "w") as f:
+        f.write(f"roots={tphotos}\ndata_dir={tdata}\n")
+    out = run(bin_path, tconf)
+    assert f"root={tphotos}/ (unconfigured) missing=1" in out, out
+    tdb = sqlite3.connect(os.path.join(tdata, "index.db"))
+    rows = dict(tdb.execute("SELECT path, state FROM photos").fetchall())
+    assert rows.get(tphotos + "//t.jpg") == "missing", rows
+    assert rows.get(os.path.join(tphotos, "t.jpg")) == "queued", rows
+    tdb.close()
+
     # Empty roots (#108): the fresh-install default is a successful run,
     # never an error. The walk no-ops; the run still opens one job and
     # sweeps (nothing is stored yet), so the index appears with zero

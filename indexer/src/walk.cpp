@@ -92,11 +92,11 @@ bool scan_root(Db& db, long job_id, const std::string& root,
     return walk_dir(db, job_id, root, root, 0, max_depth, c, err);
 }
 
-std::string canonical_root(const std::string& path) {
-    char resolved[PATH_MAX];
-    if (realpath(path.c_str(), resolved) != nullptr) return resolved;
-    // The root may not exist (unmounted share): fall back to a lexical
-    // cleanup so the overlap gate still has a stable form to compare.
+namespace {
+
+// Lexical cleanup: duplicate slashes, "." and ".." segments, trailing
+// slash. Never empty for a nonempty absolute input.
+std::string lexical_clean(const std::string& path) {
     std::vector<std::string> segs;
     std::string cur;
     const bool absolute = !path.empty() && path[0] == '/';
@@ -126,6 +126,39 @@ std::string canonical_root(const std::string& path) {
     }
     if (out.empty()) out = absolute ? "/" : path;
     return out;
+}
+
+}  // namespace
+
+std::string canonical_root(const std::string& path) {
+    // One consistent representation for the overlap gate (CodeRabbit #112
+    // major 1): resolve the longest EXISTING prefix with realpath (so
+    // symlinked shares resolve the same way for every path through them),
+    // then append the lexically-cleaned unresolved tail. A root whose
+    // subtree is temporarily missing (unmounted share) would otherwise
+    // keep its symlinked spelling while an existing stored root resolves
+    // - and the gate would miss a real ancestor relation.
+    const std::string lex = lexical_clean(path);
+    std::string prefix = lex;
+    std::string tail;
+    while (true) {
+        char resolved[PATH_MAX];
+        if (!prefix.empty() && realpath(prefix.c_str(), resolved) != nullptr) {
+            std::string out = resolved;
+            if (!tail.empty()) {
+                if (out != "/") out += '/';
+                out += tail;
+            }
+            return out;
+        }
+        if (prefix.empty() || prefix == "/") return lex;  // nothing resolves
+        const size_t pos = prefix.find_last_of('/');
+        const std::string seg = prefix.substr(pos + 1);
+        tail = tail.empty() ? seg : seg + "/" + tail;
+        if (pos == std::string::npos) prefix.clear();
+        else if (pos == 0) prefix = "/";
+        else prefix = prefix.substr(0, pos);
+    }
 }
 
 bool roots_overlap(const std::string& canonical_a, const std::string& canonical_b) {

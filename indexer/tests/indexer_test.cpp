@@ -89,6 +89,18 @@ int main() {
     check(!wfi::roots_overlap("/a/b", "/a/bc"),
           "shared prefix without a segment boundary is not an overlap");
     check(!wfi::roots_overlap("/a", "/b"), "unrelated roots do not overlap");
+    // Longest-existing-prefix resolution (CodeRabbit #112 major 1): a
+    // missing tail under a SYMLINKED prefix resolves through the link, so
+    // an unmounted child and an existing parent compare in one form.
+    check(mkdir((tmp + "/storage").c_str(), 0700) == 0, "storage dir");
+    check(symlink((tmp + "/storage").c_str(), (tmp + "/link").c_str()) == 0,
+          "symlinked prefix created");
+    check(wfi::canonical_root(tmp + "/link/sub/missing") ==
+              tmp + "/storage/sub/missing",
+          "missing tail resolves through the symlinked prefix");
+    check(wfi::roots_overlap(wfi::canonical_root(tmp + "/link/sub/missing"),
+                             wfi::canonical_root(tmp + "/storage/sub")),
+          "unmounted child still overlaps the resolved parent");
 
     // First scan: two JPEGs queued (txt ignored).
     long job1 = db.begin_job(root);

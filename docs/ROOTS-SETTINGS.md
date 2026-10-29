@@ -140,7 +140,14 @@ be wrongly swept. Rule: an unconfigured stored root overlapped by
 configured roots (ancestor/descendant, canonicalized - the rule-9
 relation) is swept under the run's shared job only when EVERY
 overlapping configured root's walk completed this run; any incomplete
-overlapping walk skips that sweep. Regression tests: (a) index under
+overlapping walk skips that sweep. Canonicalization resolves the
+longest EXISTING prefix and appends the cleaned tail, so a
+temporarily missing (unmounted) root and an existing symlinked
+neighbour compare in one consistent form (CodeRabbit #112). The
+"is this stored root still configured" check is EXACT TEXT, not
+canonical: `sweep_missing` matches on the root column's text, so a
+trailing-slash config edit must not skip the old rows (CodeRabbit
+#112). Regression tests: (a) index under
 `/shares/Photos`, narrow the config to `/shares/Photos/2020`, rescan -
 photos under `2020` stay `scanned`, the rest flip to `missing`;
 (b) the same setup with an unreadable `2020` subdir (incomplete walk)
