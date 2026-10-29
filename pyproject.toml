@@ -5,6 +5,7 @@ description = "On-device face clustering and naming for the WD My Cloud PR4100 (
 requires-python = ">=3.11"
 
 [tool.ruff]
+extend-exclude = ["scripts/security/scorecard_guard.py", "tests/security/test_scorecard_guard.py"]
 src = ["src", "tests"]
 
 [tool.ruff.lint]
