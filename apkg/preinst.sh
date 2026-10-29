@@ -15,8 +15,13 @@ APP_SCRIPT="$(basename "$0")"
 . "${APP_DIR}/helpers.sh"
 
 QUIESCE_MAX="${WDF_QUIESCE_MAX_SECS:-60}"
+# Process discovery is injectable (review #101): tests substitute a
+# pidof that only sees the fakes they started, so a test run can never
+# signal a real indexer on a dev/CI machine.
+PIDOF="${WDF_PIDOF:-pidof}"
 n=0
-while pidof wdf_indexer wdf_faces >/dev/null 2>&1; do
+# shellcheck disable=SC2086
+while $PIDOF wdf_indexer wdf_faces >/dev/null 2>&1; do
     n=$((n + 1))
     if [ "$n" -le "$QUIESCE_MAX" ]; then
         sleep 1
@@ -24,20 +29,22 @@ while pidof wdf_indexer wdf_faces >/dev/null 2>&1; do
     fi
     log "wdf_indexer/wdf_faces still running after ${QUIESCE_MAX}s - terminating"
     # shellcheck disable=SC2046
-    kill $(pidof wdf_indexer wdf_faces) 2>/dev/null
+    kill $($PIDOF wdf_indexer wdf_faces) 2>/dev/null
     t=0
-    while pidof wdf_indexer wdf_faces >/dev/null 2>&1; do
+    # shellcheck disable=SC2086
+    while $PIDOF wdf_indexer wdf_faces >/dev/null 2>&1; do
         t=$((t + 1))
         if [ "$t" -gt 5 ]; then
             log "still running after SIGTERM - escalating to SIGKILL"
             # shellcheck disable=SC2046
-            kill -9 $(pidof wdf_indexer wdf_faces) 2>/dev/null
+            kill -9 $($PIDOF wdf_indexer wdf_faces) 2>/dev/null
             sleep 1
             break
         fi
         sleep 1
     done
-    if pidof wdf_indexer wdf_faces >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    if $PIDOF wdf_indexer wdf_faces >/dev/null 2>&1; then
         log "ERROR: wdf_indexer/wdf_faces survived SIGKILL - refusing to upgrade over a live run"
         exit 1
     fi
