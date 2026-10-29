@@ -112,9 +112,11 @@ real-hardware go/no-go data for milestone M2.
    indexed photos are `missing` and their faces drop out of the People
    counts - named people stay listed at zero faces, nothing is deleted.
 4. Re-add the real folder and run the indexer (or wait for its schedule):
-   the next run scans exactly the configured roots, the missing photos
-   return to the index, and their faces rejoin the same people (names
-   preserved).
+   the next run scans exactly the configured roots, and unchanged
+   missing photos return WITHOUT re-processing (the summary line counts
+   them as `restored=`): their faces rejoin the same people with names
+   preserved. A photo whose content changed while away is re-queued
+   and re-processed as usual.
 
 ## 5. Rules
 - Only the synthetic self-test runs at this stage - the indexer does not scan

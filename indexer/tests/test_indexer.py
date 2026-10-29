@@ -217,7 +217,11 @@ def main():
     assert all(st == "missing" for st in after.values()), after
     jobs_after = db.execute("SELECT COUNT(*) FROM scan_jobs").fetchone()[0]
     assert jobs_after == jobs_before + 1, (jobs_before, jobs_after)
-    run(bin_path, conf)  # the original single-root config, restored
+    out = run(bin_path, conf)  # the original single-root config, restored
+    # Unchanged files return WITHOUT re-queueing (reviewer #112): these
+    # were never processed (scanned_at NULL) so they land back in
+    # 'queued'; processed photos would return straight to 'scanned'.
+    assert "restored=2" in out and "changed=0" in out, out
     states = dict(db.execute("SELECT path, state FROM photos").fetchall())
     # b.jpg is gone from disk and stays missing; the rest re-queue.
     assert states[os.path.join(root, "sub", "b.jpg")] == "missing", states

@@ -83,7 +83,7 @@ roots; `wdf_indexer` prints "no roots configured - nothing to scan",
 skips the walk and exits 0 - but still opens the run's one shared job
 and sweeps every stored root under it (the zero-root corner of the
 removal rule below: clearing ALL roots flips every indexed photo to
-`missing`, reversibly); `wdf_faces` DB operations (`process`,
+`missing`, reversibly - see "Restore path" below); `wdf_faces` DB operations (`process`,
 `cluster`, `gc`, people rename/merge) keep operating on the existing
 index; read commands are unaffected. The
 contract test pins BOTH halves end to end (CodeRabbit #103): on a
@@ -107,11 +107,11 @@ walk, and only its photos NOT observed in the run's shared job flip
 to `missing`: an overlapping configured root may have re-observed
 some of them. Unchanged re-observations keep their stored root and
 update only `last_seen_job` (exempt via `last_seen_job == J`);
-changed or back-from-`missing` ones adopt the current walk's root
+changed ones adopt the current walk's root
 (`observe()` sets `root = excluded.root`), leaving the stored root
 entirely - both kinds escape the sweep. The rest flip to `missing`,
 their faces stop feeding identity rebuilds, and re-adding the root
-later re-queues them through the normal `missing -> changed` path.
+later brings them back through the restore path below.
 
 Shipped as one job generation per RUN, shared by every configured
 root and by the unconfigured-root sweeps (CodeRabbit #103):
@@ -162,6 +162,22 @@ a restore is possible). The root-removal tests verify the full cycle,
 not just the state column: scan with the root, rescan without it
 (photos `missing`, faces out of clustering and people, person intact),
 re-add the root (photos and faces back).
+
+## Restore path (reviewer #112)
+
+A photo back from `missing` with IDENTICAL size+mtime is the same
+file that was indexed: its processed face rows and their cluster
+memberships are still valid. `observe()` therefore restores it WITHOUT
+re-queueing (outcome "restored", counted separately in the scan
+summary): the pre-`missing` state is recovered from
+`scanned_at`/`fail_reason` (never processed -> `queued`, processed ->
+`scanned`, failed -> `failed`) and only `last_seen_job` moves.
+Re-queueing an unchanged return would re-run `replace_faces`, whose
+fresh face rows carry `cluster_id NULL`; the next rebuild's overlap
+claim - keyed by face row id - would find no face pointing at the
+named cluster and the person would go anonymous (demonstrated by the
+reviewer with the real binary). A return with changed size or mtime
+re-queues through the normal `missing -> changed` path as before.
 
 ## Apply-time semantics
 

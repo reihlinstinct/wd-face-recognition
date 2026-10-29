@@ -124,7 +124,10 @@ int main() {
     db.sweep_missing(job3, root);
     check(c3.changed == 1 && c3.skipped == 1, "mtime change re-queues exactly one");
 
-    // Delete one: marked missing. Restore: re-queued.
+    // Delete one: marked missing. A byte-identical return restores
+    // WITHOUT re-queueing (reviewer #112); a changed return re-queues.
+    struct stat b4;
+    stat((root + "/sub/b.jpg").c_str(), &b4);
     unlink((root + "/sub/b.jpg").c_str());
     long job4 = db.begin_job(root);
     wfi::ScanCounts c4;
@@ -132,11 +135,20 @@ int main() {
     long miss4 = db.sweep_missing(job4, root);
     check(miss4 == 1, "deleted photo marked missing");
     write_file(root + "/sub/b.jpg", "bbbb");
+    struct utimbuf btb { b4.st_atime, b4.st_mtime };
+    utime((root + "/sub/b.jpg").c_str(), &btb);  // same bytes, same mtime
     long job5 = db.begin_job(root);
     wfi::ScanCounts c5;
     check(wfi::scan_root(db, job5, root, 8, c5, err), "fifth scan runs");
     db.sweep_missing(job5, root);
-    check(c5.changed == 1 || c5.added == 1, "reappeared photo re-queued");
+    check(c5.restored == 1 && c5.changed == 0 && c5.added == 0,
+          "unchanged return restores without re-queue");
+    write_file(root + "/sub/b.jpg", "bbbb!");  // new size, new mtime
+    long jobrb = db.begin_job(root);
+    wfi::ScanCounts crb;
+    check(wfi::scan_root(db, jobrb, root, 8, crb, err), "changed-return scan runs");
+    db.sweep_missing(jobrb, root);
+    check(crb.changed == 1 && crb.restored == 0, "changed return re-queues");
 
     // Depth cap: a photo deeper than max-depth is not seen.
     mkdir((root + "/d1").c_str(), 0777);
@@ -663,6 +675,100 @@ int main() {
         check(db.people_list(pl, err) && pl.size() == 2 && pl[0].name == "Ima",
               "final state: one named person");
         first_id = pl[0].id;
+    }
+
+    // Restore keeps identity (reviewer + CodeRabbit #112), driving the
+    // REAL lifecycle on an isolated index: scan (observe) -> process
+    // (replace_faces) -> recluster -> name -> sweep missing -> restore
+    // scan -> pipeline pass -> recluster. A file back from missing with
+    // identical size+mtime restores WITHOUT re-queueing: re-queueing
+    // would re-run replace_faces, whose fresh face rows carry
+    // cluster_id NULL, and the next rebuild's overlap claim - keyed by
+    // face row id - would find no face pointing at Alice's cluster:
+    // she goes anonymous. Isolated DB so the rebuilds cannot disturb
+    // the shared fixtures above.
+    {
+        const std::string rdata = tmp + "/rdata";
+        const std::string rroot = tmp + "/rroot";
+        check(mkdir(rdata.c_str(), 0700) == 0, "lifecycle data dir");
+        check(mkdir(rroot.c_str(), 0700) == 0, "lifecycle root dir");
+        wfi::Db rdb;
+        check(rdb.open(rdata + "/index.db", err), "lifecycle db opens");
+
+        write_file(rroot + "/alice.jpg", "alice-bytes");
+        struct stat ast;
+        check(stat((rroot + "/alice.jpg").c_str(), &ast) == 0, "alice stat");
+        long joba = rdb.begin_job(rroot);
+        check(rdb.observe(joba, rroot, rroot + "/alice.jpg",
+                          (int64_t)ast.st_size, (int64_t)ast.st_mtime, err) == 1,
+              "alice queued by the scan");
+        check(rdb.flush(), "alice batch committed");
+        std::vector<wfi::QueuedPhoto> aq;
+        check(rdb.queued_photos(100, aq, err), "alice queue readable");
+        check(aq.size() == 1, "alice alone in the queue");
+        wfi::FaceRow fr;
+        fr.bbox = "0,0,1,1";
+        fr.embedding = {0.7f, 1.7f};
+        fr.crop_path = "crops/alice_f0.jpg";
+        std::vector<std::string> oldc;
+        bool conflict = true;
+        check(rdb.replace_faces(aq[0].id, aq[0].size, aq[0].mtime, {fr}, oldc,
+                                conflict, err) && !conflict,
+              "alice processed through replace_faces");
+        wfi::ClusterCounts cc;
+        check(wfi::recluster(rdb, 0.5, cc, err) && cc.people == 1,
+              "alice clustered");
+        std::vector<wfi::PersonSummary> pl;
+        check(rdb.people_list(pl, err) && pl.size() == 1, "alice listed");
+        const long alice_cid = pl[0].id;
+        check(rdb.rename_cluster(alice_cid, "Alice", err), "alice named Alice");
+
+        // The root's file vanishes: swept missing, faces keep membership.
+        check(unlink((rroot + "/alice.jpg").c_str()) == 0, "alice unlinked");
+        long jobb = rdb.begin_job(rroot);
+        wfi::ScanCounts cb;
+        check(wfi::scan_root(rdb, jobb, rroot, 8, cb, err), "post-delete walk");
+        check(rdb.sweep_missing(jobb, rroot) == 1, "alice swept missing");
+
+        // Same bytes come back with the same mtime: restored, NOT
+        // re-queued - the queue drain below is the pipeline pass that
+        // follows every scan, and it must find NOTHING to redo.
+        write_file(rroot + "/alice.jpg", "alice-bytes");
+        struct utimbuf tb;
+        tb.actime = ast.st_atime;
+        tb.modtime = ast.st_mtime;
+        check(utime((rroot + "/alice.jpg").c_str(), &tb) == 0,
+              "alice mtime restored");
+        long jobc = rdb.begin_job(rroot);
+        wfi::ScanCounts ccnt;
+        check(wfi::scan_root(rdb, jobc, rroot, 8, ccnt, err), "restore walk");
+        check(ccnt.restored == 1 && ccnt.changed == 0 && ccnt.added == 0,
+              "unchanged return restores without re-queue (mutant: changed)");
+        check(rdb.queued_photos(100, aq, err), "post-restore queue readable");
+        for (const auto& qq : aq) {
+            std::vector<std::string> oc;
+            bool cf2 = true;
+            check(rdb.replace_faces(qq.id, qq.size, qq.mtime, {fr}, oc, cf2,
+                                    err) && !cf2,
+                  "queued photo processed");
+        }
+        check(aq.empty(),
+              "restored photo is NOT re-processed (mutant: re-queued)");
+        check(wfi::recluster(rdb, 0.5, cc, err), "rebuild after restore");
+        check(rdb.people_list(pl, err) && pl.size() == 1 &&
+                  pl[0].id == alice_cid && pl[0].name == "Alice" &&
+                  pl[0].face_count == 1,
+              "Alice keeps her cluster, name and face through the cycle");
+
+        // A CHANGED return still re-queues and re-processes (the other
+        // half of the rule): new content = new faces.
+        write_file(rroot + "/alice.jpg", "alice-bytes-changed");
+        long jobd = rdb.begin_job(rroot);
+        wfi::ScanCounts cd;
+        check(wfi::scan_root(rdb, jobd, rroot, 8, cd, err), "changed walk");
+        check(cd.changed == 1 && cd.restored == 0,
+              "changed return re-queues");
+        // rdb closes at scope end (destructor).
     }
 
     // --threshold parsing (issue #67): validated strtod, finite, [-1,1].

@@ -247,9 +247,11 @@ int Db::observe(long job_id, const std::string& root, const std::string& path,
         return -1;
     }
 
-    int outcome;  // 0 skipped, 1 added, 2 changed
+    int outcome;  // 0 skipped, 1 added, 2 changed, 3 restored
     if (!existed) {
         outcome = 1;
+    } else if (old_state == "missing" && old_size == size && old_mtime == mtime) {
+        outcome = 3;
     } else if (old_size != size || old_mtime != mtime || old_state == "missing") {
         outcome = 2;
     } else {
@@ -260,6 +262,29 @@ int Db::observe(long job_id, const std::string& root, const std::string& path,
     bool ok;
     if (outcome == 0) {
         const char* sql = "UPDATE photos SET last_seen_job = ? WHERE path = ?";
+        ok = sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) == SQLITE_OK;
+        if (ok) {
+            sqlite3_bind_int64(st, 1, job_id);
+            sqlite3_bind_text(st, 2, path.c_str(), -1, SQLITE_TRANSIENT);
+        }
+    } else if (outcome == 3) {
+        // Back from missing with identical size+mtime: the file is the
+        // same one that was indexed, so its processed face rows (and
+        // their cluster memberships) are still valid. Restore WITHOUT
+        // re-queueing (reviewer + CodeRabbit #112): re-queueing runs
+        // replace_faces, which deletes and re-inserts face rows with
+        // cluster_id NULL, and the next rebuild's overlap claim - keyed
+        // by face row id - would no longer find the named cluster's
+        // faces: the person goes anonymous. scanned_at / fail_reason
+        // recover the pre-missing state: never processed -> queued
+        // (nothing was lost), processed -> scanned, failed -> failed.
+        const char* sql =
+            "UPDATE photos SET state = CASE"
+            "   WHEN scanned_at IS NULL THEN 'queued'"
+            "   WHEN fail_reason IS NOT NULL THEN 'failed'"
+            "   ELSE 'scanned' END,"
+            " last_seen_job = ?"
+            " WHERE path = ?";
         ok = sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) == SQLITE_OK;
         if (ok) {
             sqlite3_bind_int64(st, 1, job_id);

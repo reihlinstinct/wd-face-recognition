@@ -118,7 +118,7 @@ keep_id = cur.lastrowid
 # One face attached to old_id, so the merge must move it (CodeRabbit #76).
 cur.execute(
     "INSERT INTO photos(root, path, size, mtime, state, detector_ver,"
-    " embedder_ver) VALUES(?, ?, 8, 1000, 'done', 't', 't')",
+    " embedder_ver) VALUES(?, ?, 8, 1000, 'scanned', 't', 't')",
     (tmp, os.path.join(tmp, "seed.jpg")))
 photo_id = cur.lastrowid
 cur.execute(
@@ -316,6 +316,9 @@ check(r.returncode == 0 and crops == {"crops/seed.jpg", "crops/seed2.jpg"},
 # photo rejoins the SAME person (name preserved).
 db = sqlite3.connect(dbp)
 db.execute("UPDATE photos SET state='missing' WHERE id=?", (photo_id,))
+# (The full missing -> restore lifecycle through scan -> replace_faces ->
+# cluster is pinned in indexer_test.cpp's "Restore keeps identity" block;
+# here the direct UPDATE isolates the QUERY exclusion semantics.)
 db.commit()
 db.close()
 r = run("people", "--config", conf)
@@ -345,7 +348,7 @@ kept = [p for p in people if p["id"] == keep_id]
 check(kept and kept[0]["faces"] == 0 and kept[0]["name"] == "EmptyOK",
       "all-missing person still listed at zero faces")
 db = sqlite3.connect(dbp)
-db.execute("UPDATE photos SET state='done' WHERE id=?", (photo_id,))
+db.execute("UPDATE photos SET state='scanned' WHERE id=?", (photo_id,))
 db.commit()
 db.close()
 r = run("people", "--config", conf)
