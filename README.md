@@ -1,5 +1,7 @@
 # WD Face Recognition
 
+[![CI](https://github.com/reihlinstinct/wd-face-recognition/actions/workflows/ci.yml/badge.svg)](https://github.com/reihlinstinct/wd-face-recognition/actions/workflows/ci.yml)
+
 On-device face detection and grouping for the WD My Cloud PR4100 NAS, packaged
 as a My Cloud OS 5 app. This is a development project, not a finished photo
 management product. MIT licensed.
