@@ -53,7 +53,7 @@
    "path": "requirements-dev.txt",
    "rule": "unhashed-requirement",
    "scope": "dependencies",
-   "evidence": "pytest==9.1.1",
+   "evidence": "pytest==9.2.0",
    "issue": "https://github.com/reihlinstinct/wd-face-recognition/issues/123",
    "reason": "Pre-existing requirement entry without exact version and sha256 hash; tracked for hash pinning in this issue."
   },
