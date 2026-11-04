@@ -72,7 +72,6 @@ jobs:
           fi
   test:
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -80,14 +79,18 @@ jobs:
         python-version: ['3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code == 'true'
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: needs.changes.outputs.code == 'true'
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements-dev.txt
       - run: pip install -r requirements-dev.txt
+        if: needs.changes.outputs.code == 'true'
       # Coverage gate: >= 80% floor, enforced from day one (house standard).
       - run: python -m pytest -q --cov=src --cov-report=term --cov-fail-under=80
+        if: needs.changes.outputs.code == 'true'
   demo-scan-test:
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
