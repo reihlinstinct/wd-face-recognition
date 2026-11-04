@@ -460,6 +460,18 @@ def _parse_needs(raw):
     return {k: v for k, v in data.items() if isinstance(v, dict)}
 
 
+
+def reported_result(job, needs):
+    """Distinguish a successful required context from executed test work."""
+    result = needs[job].get("result", "unknown")
+    changes = needs.get("changes", {})
+    if (job == "test" and result == "success"
+            and changes.get("result") == "success"
+            and changes.get("outputs", {}).get("code") == "false"):
+        return "skipped"
+    return result
+
+
 def main():
     try:
         _self_test()
@@ -491,7 +503,7 @@ def main():
         counts = {}
         total = 0.0
         for job in sorted(needs):
-            result = needs[job].get("result", "unknown")
+            result = reported_result(job, needs)
             counts[result] = counts.get(result, 0) + 1
             dur = duration_for(job, durations, display_names)
             if dur is not None:
@@ -510,10 +522,15 @@ def main():
             out.append("Per-job durations unavailable (jobs API not "
                        "reachable with this token).")
         skipped = [j for j in sorted(needs)
-                   if needs[j].get("result") == "skipped"]
+                   if reported_result(j, needs) == "skipped"]
         if skipped:
             out.append("\nSkipped jobs:")
             for job in skipped:
+                if job == "test" and needs[job].get("result") == "success":
+                    out.append("- `test` - docs-only: pytest/setup/install steps "
+                               "skipped; required matrix contexts succeeded, "
+                               "but tests did not execute.")
+                    continue
                 cond = conditions.get(job)
                 out.append(f"- `{job}`" +
                            (f" - runs only if {md_escape(cond)}"
