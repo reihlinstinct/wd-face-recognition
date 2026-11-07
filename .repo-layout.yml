@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "comment": "Repo layout contract, enforced by tools/check_repo_layout.py. JSON syntax: valid YAML too, parses with the Python standard library. required: paths that must exist (trailing slash = directory). root: files at the repository root must match allow and never match deny. directories: every tracked top-level directory must be listed; files under it (any depth) must match one allow pattern (matched against the basename).",
+  "required": [
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "SECURITY.md",
+    "ACCESSIBILITY.md",
+    ".github/CODEOWNERS",
+    ".github/ISSUE_TEMPLATE/"
+  ],
+  "root": {
+    "allow": [
+      "*.md",
+      "*.toml",
+      "*.txt",
+      "*.yml",
+      ".gitignore",
+      "LICENSE"
+    ],
+    "deny": [
+      "*.py"
+    ]
+  },
+  "directories": {
+    ".github": {
+      "allow": [
+        "*.json",
+        "*.md",
+        "*.yml",
+        "CODEOWNERS"
+      ]
+    },
+    "apkg": {
+      "allow": [
+        "*.php",
+        "*.png",
+        "*.rc",
+        "*.sh",
+        "*.svg"
+      ]
+    },
+    "bench": {
+      "allow": [
+        "*.cpp",
+        "*.h",
+        "*.md",
+        "*.py",
+        "*.rs",
+        "*.sh",
+        "*.toml",
+        "*.txt"
+      ]
+    },
+    "demo": {
+      "allow": [
+        "*.cpp",
+        "*.h",
+        "*.md",
+        "*.sh",
+        "*.txt"
+      ]
+    },
+    "docs": {
+      "allow": [
+        "*.md"
+      ]
+    },
+    "indexer": {
+      "allow": [
+        "*.cpp",
+        "*.h",
+        "*.py",
+        "*.sh",
+        "*.txt",
+        ".gitkeep"
+      ]
+    },
+    "packaging": {
+      "allow": [
+        "*.sh"
+      ]
+    },
+    "pipeline": {
+      "allow": [
+        "*.cpp",
+        "*.h"
+      ]
+    },
+    "scripts": {
+      "allow": [
+        "*.py"
+      ]
+    },
+    "service": {
+      "allow": [
+        "*.rs",
+        "*.toml"
+      ]
+    },
+    "src": {
+      "allow": [
+        "*.py"
+      ]
+    },
+    "tests": {
+      "allow": [
+        "*.py"
+      ]
+    },
+    "tools": {
+      "allow": [
+        "*.py"
+      ]
+    },
+    "worker": {
+      "allow": [
+        "*.cpp",
+        "*.txt"
+      ]
+    }
+  }
+}

@@ -20,3 +20,7 @@ Thanks for helping with on-device face clustering and naming for the WD PR4100 N
 ## Tests and privacy
 
 Tests must use synthetic images and identities. Never upload actual user photos to GitHub Actions or other hosted CI. Include automated regression tests for bug fixes; if automation is not feasible, explain why and open a test follow-up issue.
+
+## File placement (enforced)
+
+Decide where a file lives BEFORE creating it. The contract in `.repo-layout.yml` lists the allowed top-level directories, the file types permitted in each, and the required community-standards files; `python3 tools/check_repo_layout.py` enforces it in CI. A new kind of file means updating the contract in the same PR.
