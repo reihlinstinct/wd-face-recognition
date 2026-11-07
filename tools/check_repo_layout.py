@@ -46,14 +46,15 @@ def check(root: Path) -> list[str]:
     contract = load_contract(root)
     violations: list[str] = []
 
+    files = tracked_files(root)
+    tracked = set(files)
     for required in contract["required"]:
         if required.endswith("/"):
             if not (root / required.rstrip("/")).is_dir():
                 violations.append(f"required directory missing: {required}")
-        elif not (root / required).is_file():
+        elif required not in tracked or not (root / required).is_file():
             violations.append(f"required file missing: {required}")
 
-    files = tracked_files(root)
     dirs = contract["directories"]
     root_rules = contract["root"]
     deny_patterns = root_rules.get("deny", [])
