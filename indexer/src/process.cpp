@@ -88,7 +88,9 @@ bool process_queued(Db& db, const std::string& models_dir,
         std::string reason;
         wfp::RgbImage img = wfp::decode_jpeg(q.path, &reason);
         if (img.pixels.empty()) {
-            // "too large" for the pixel cap, "decode" for corrupt files.
+            // "too large" for the pixel cap, "decode" for corrupt files,
+            // "damaged" when libjpeg decoded only with warnings (issue
+            // #49: partial pixels are never embedded).
             const std::string why = reason.empty() ? "decode" : reason;
             bool conflict = false;
             if (!mark_failed_with_retry(db, q, why, conflict, err)) {

@@ -26,6 +26,20 @@ extern "C" void jpeg_fatal_recover(j_common_ptr cinfo) {
     longjmp(err->jb, 1);
 }
 
+// Damaged-file policy (issue #49, owner decision 2026-11-08): ANY libjpeg
+// warning rejects the photo - a truncated file decodes with a warning and
+// partial pixels, and an embedding built from partial pixels can shift a
+// cluster's centroid and pollute future matches. Warnings are counted and
+// the first one's text kept for the reject log line; libjpeg's default
+// emit_message would print bare messages with no file attribution.
+extern "C" void jpeg_count_warning(j_common_ptr cinfo, int msg_level) {
+    if (msg_level >= 0) return;  // trace output stays silent
+    auto* err = reinterpret_cast<JpegErrorMgr*>(cinfo->err);
+    ++err->pub.num_warnings;
+    if (err->msg[0] == '\0')
+        (*cinfo->err->format_message)(cinfo, err->msg);
+}
+
 }  // namespace
 
 RgbImage decode_jpeg(const std::string& path, std::string* reason,
@@ -40,6 +54,7 @@ RgbImage decode_jpeg(const std::string& path, std::string* reason,
     JpegErrorMgr jerr{};
     cinfo.err = jpeg_std_error(&jerr.pub);
     jerr.pub.error_exit = jpeg_fatal_recover;
+    jerr.pub.emit_message = jpeg_count_warning;
     // Only POD locals may live across this boundary: longjmp bypasses C++
     // destructors, so the pixel buffer is a POD new[] pointer here, adopted into the
     // RgbImage (no copy) only after jpeg_destroy_decompress has run. Locals
@@ -88,11 +103,19 @@ RgbImage decode_jpeg(const std::string& path, std::string* reason,
             jpeg_finish_decompress(&cinfo);
         }
     }
+    // Reject on any warning (issue #49): libjpeg recovers from truncation
+    // with partial pixels, and partial pixels must never be embedded.
+    const bool damaged = jerr.pub.num_warnings > 0;
     jpeg_destroy_decompress(&cinfo);
     created = false;
     std::fclose(f);
     RgbImage img;
-    if (buf) {
+    if (damaged) {
+        std::fprintf(stderr, "reject damaged %s (libjpeg: %s)\n",
+                     path.c_str(), jerr.msg);
+        delete[] buf;
+        if (reason) *reason = "damaged";
+    } else if (buf) {
         img.w = w;
         img.h = h;
         img.pixels.adopt(buf, (size_t)w * h * 3);  // no copy
