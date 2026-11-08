@@ -299,6 +299,11 @@ considered and rejected: accept partials silently (cluster pollution);
 accept but mark degraded (most code, ambiguous UX); reject only on
 "material" truncation (libjpeg cannot reliably report how much is
 missing, so the threshold would be guesswork).
+A photo that was indexed while healthy and FAILS a later re-scan keeps its
+old face rows but drops out of people search and identity rebuilds
+(issue #148, same hidden-but-kept semantics as a missing root): the cluster
+keeps its id and name, and a repaired file rejoins through the normal
+re-process path.
 
 ### Packaging
 - Built in a Debian 11 Bullseye Docker container in CI, following the

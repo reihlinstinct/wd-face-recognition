@@ -572,11 +572,14 @@ bool Db::all_face_embeddings(std::vector<ClusterFace>& out, std::string& err) {
     }
     sqlite3_stmt* st = nullptr;
     // Faces of missing photos are out of identity rebuilds (root removal,
-    // #102): the rows stay (reversible), the cluster input skips them.
+    // #102); faces of FAILED photos are out too (issue #148): a re-queued
+    // photo that now fails decode keeps its old face rows, and those stale
+    // faces must not drive new clusters. The rows stay (reversible), the
+    // cluster input skips them.
     if (sqlite3_prepare_v2(db_,
             "SELECT f.id, f.photo_id, f.embedding FROM faces f"
             " JOIN photos p ON p.id = f.photo_id"
-            " WHERE p.state != 'missing' ORDER BY f.id",
+            " WHERE p.state NOT IN ('missing','failed') ORDER BY f.id",
                            -1, &st, nullptr) != SQLITE_OK) {
         err = sqlite3_errmsg(db_);
         return false;
@@ -728,20 +731,22 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
             if (cid != 0) reused.insert(cid);
         // Clear assignments: faces no group covers end at NULL rather
         // than pointing at a cluster they no longer belong to. Faces on
-        // MISSING photos keep their membership (root removal, #102):
-        // excluded from the cluster input, they must not be detached -
-        // the stored cluster_id is what lets a restored root rejoin the
-        // same person below (the face_cluster map reads them).
+        // MISSING photos keep their membership (root removal, #102), and
+        // faces on FAILED photos keep it too (issue #148): excluded from
+        // the cluster input, they must not be detached - the stored
+        // cluster_id is what lets a restored root or a repaired file
+        // rejoin the same person below (the face_cluster map reads them).
         if (sqlite3_exec(db_,
                 "UPDATE faces SET cluster_id = NULL WHERE photo_id IN"
-                " (SELECT id FROM photos WHERE state != 'missing')",
+                " (SELECT id FROM photos WHERE state NOT IN ('missing','failed'))",
                 nullptr, nullptr, nullptr) != SQLITE_OK)
             break;
         // Drop live clusters no group kept - EXCEPT a cluster whose
-        // remaining faces sit on missing photos (root removal, #102):
-        // exclusion from the cluster input must not dissolve the person;
-        // the name and membership survive so a restored root rejoins the
-        // same identity instead of forming a new anonymous cluster.
+        // remaining faces sit on missing (root removal, #102) or failed
+        // (issue #148) photos: exclusion from the cluster input must not
+        // dissolve the person; the name and membership survive so a
+        // restored root or repaired file rejoins the same identity
+        // instead of forming a new anonymous cluster.
         {
             std::set<long> protected_ids;
             {
@@ -749,7 +754,7 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
                 if (sqlite3_prepare_v2(db_,
                         "SELECT DISTINCT f.cluster_id FROM faces f"
                         " JOIN photos p ON p.id = f.photo_id"
-                        " WHERE p.state = 'missing' AND f.cluster_id IS NOT NULL",
+                        " WHERE p.state IN ('missing','failed') AND f.cluster_id IS NOT NULL",
                         -1, &pst, nullptr) != SQLITE_OK) {
                     step_ok = false;
                 } else {
@@ -858,14 +863,15 @@ bool Db::people_list(std::vector<PersonSummary>& out, std::string& err) {
     }
     sqlite3_stmt* st = nullptr;
     const char* sql =
-        // Faces of missing photos count for nothing identity-shaped (root
-        // removal, #102); the rows stay, so a restored root rejoins.
+        // Faces of missing (root removal, #102) or failed (issue #148)
+        // photos count for nothing identity-shaped; the rows stay, so a
+        // restored root or repaired file rejoins.
         "SELECT c.id, COALESCE(c.name, ''),"
         " (SELECT count(*) FROM faces f JOIN photos fp ON fp.id = f.photo_id"
-        "  WHERE f.cluster_id = c.id AND fp.state != 'missing'),"
+        "  WHERE f.cluster_id = c.id AND fp.state NOT IN ('missing','failed')),"
         " COALESCE((SELECT f2.crop_path FROM faces f2"
         "          JOIN photos fp2 ON fp2.id = f2.photo_id"
-        "          WHERE f2.cluster_id = c.id AND fp2.state != 'missing'"
+        "          WHERE f2.cluster_id = c.id AND fp2.state NOT IN ('missing','failed')"
         "          ORDER BY f2.id LIMIT 1), '')"
         " FROM clusters c WHERE c.merged_into IS NULL"
         " ORDER BY 3 DESC, c.id";
@@ -904,7 +910,7 @@ bool Db::person_faces(long cluster_id, std::vector<PersonFace>& out,
     const char* sql =
         "SELECT f.id, f.bbox, f.crop_path, p.path"
         " FROM faces f JOIN photos p ON p.id = f.photo_id"
-        " WHERE f.cluster_id = ? AND p.state != 'missing'"
+        " WHERE f.cluster_id = ? AND p.state NOT IN ('missing','failed')"
         " ORDER BY p.path, f.id";
     if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
         err = sqlite3_errmsg(db_);
