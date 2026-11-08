@@ -6,9 +6,11 @@
 #include <cstring>
 #include <cerrno>
 #include <dirent.h>
+#include <fcntl.h>
 #include <set>
 #include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "config.h"
 #include "db.h"
@@ -180,26 +182,40 @@ int main(int argc, char** argv) {
             return 1;
         }
         const std::string dir = cfg.data_dir + "/crops";
-        // lstat first (CodeRabbit #99): a symlink at crops/ would make the
-        // sweep unlink files in whatever directory it points at. Only a
-        // real directory is swept.
-        struct stat dst;
-        if (lstat(dir.c_str(), &dst) != 0 && errno == ENOENT) {
+        // fd-based traversal (issue #100): the lstat-then-opendir pair had
+        // a TOCTOU window - the directory could be swapped for a symlink
+        // between the check and the sweep, and entries were lstat()ed and
+        // unlink()ed by path. Pin the directory with one open(2) and work
+        // through the descriptor: O_NOFOLLOW refuses a symlink at open
+        // time, fstatat(AT_SYMLINK_NOFOLLOW) and unlinkat keep every later
+        // operation on the pinned directory no matter what the path is
+        // swapped to afterwards.
+        const int dfd = open(dir.c_str(), O_RDONLY | O_DIRECTORY |
+                                          O_NOFOLLOW | O_CLOEXEC);
+        if (dfd < 0 && errno == ENOENT) {
             // No crops yet: nothing to do. Same counts shape as a real
             // sweep (CodeRabbit #99).
             std::printf("removed=0 kept=0 failed=0\n");
             return 0;
         }
-        if (lstat(dir.c_str(), &dst) != 0 || !S_ISDIR(dst.st_mode) ||
-            S_ISLNK(dst.st_mode)) {
+        if (dfd < 0 && (errno == ELOOP || errno == ENOTDIR)) {
+            // A symlink or non-directory at crops/ is refused: the sweep
+            // must never follow it into another writable directory
+            // (CodeRabbit #99).
             std::fprintf(stderr, "gc: %s is not a real directory\n",
                          dir.c_str());
             return 1;
         }
-        DIR* d = opendir(dir.c_str());
+        if (dfd < 0) {
+            std::fprintf(stderr, "cannot list %s: %s\n", dir.c_str(),
+                         std::strerror(errno));
+            return 1;
+        }
+        DIR* d = fdopendir(dfd);
         if (d == nullptr) {
             std::fprintf(stderr, "cannot list %s: %s\n", dir.c_str(),
                          std::strerror(errno));
+            close(dfd);
             return 1;
         }
         long removed = 0, kept = 0, failed = 0;
@@ -210,20 +226,21 @@ int main(int argc, char** argv) {
             const std::string name = de->d_name;
             if (name == "." || name == ".." ||
                 name.find('/') != std::string::npos) continue;
-            const std::string full = dir + "/" + name;
             struct stat fst;
-            if (lstat(full.c_str(), &fst) != 0 || !S_ISREG(fst.st_mode))
+            if (fstatat(dfd, name.c_str(), &fst, AT_SYMLINK_NOFOLLOW) != 0 ||
+                !S_ISREG(fst.st_mode))
                 continue;  // directories and links stay untouched
             if (keep.count("crops/" + name) > 0) {
                 ++kept;
                 continue;
             }
-            if (unlink(full.c_str()) == 0) {
+            if (unlinkat(dfd, name.c_str(), 0) == 0) {
                 ++removed;
             } else {
                 ++failed;  // counted and named, never silent (review #99)
-                std::fprintf(stderr, "gc: cannot remove %s: %s\n",
-                             full.c_str(), std::strerror(errno));
+                std::fprintf(stderr, "gc: cannot remove %s/%s: %s\n",
+                             dir.c_str(), name.c_str(),
+                             std::strerror(errno));
             }
         }
         const int read_err = errno;  // readdir ended: 0 = clean EOF
