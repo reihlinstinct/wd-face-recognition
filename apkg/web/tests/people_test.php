@@ -71,6 +71,20 @@ check(strpos($html, '&lt;b&gt;') !== false, 'name is escaped');
 check(strpos($html, 'person.php?id=2') !== false, 'card links to person page');
 check(strpos($html, 'crop.php?f=p2_t1_f0.jpg') !== false,
     'cover passed as basename');
+// A person whose faces are all on missing or failed photos (#102, #148)
+// is listed at zero faces with an empty cover: the card shows a
+// placeholder, never an <img> pointing at crop.php?f= (issue #154).
+$zero = wdf_person_card_html(['id' => 3, 'name' => 'Dana', 'faces' => 0,
+    'cover' => '']);
+check(strpos($zero, 'crop.php') === false && strpos($zero, '<img') === false,
+    'zero-face card has no broken image');
+check(strpos($zero, 'class="nocover"') !== false,
+    'zero-face card renders the placeholder');
+check(strpos($zero, 'person.php?id=3') !== false
+    && strpos($zero, 'Dana') !== false && strpos($zero, '0 faces') !== false,
+    'zero-face card still names and links the person');
+check(strpos($html, 'class="nocover"') === false,
+    'a card with a cover shows the cover, not the placeholder');
 $faceHtml = wdf_person_face_html(['id' => 9, 'bbox' => '0,0,1,1',
     'crop' => 'crops/p9_t1_f0.jpg',
     'photo' => '/shares/Photos/<script>.jpg']);

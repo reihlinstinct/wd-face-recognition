@@ -288,6 +288,27 @@ def main():
     assert states[a] == "queued", states
     assert states[os.path.join(deep, "deep.jpg")] == "queued", states
 
+    # Failed-photo retry (issue #154, INCREMENTAL.md section 4 rule 3):
+    # the binary re-queues an UNCHANGED failed photo once per run and
+    # reports it as retried=; a content-determined failure ("damaged")
+    # waits for a change. The failure rows are written the way wdf_faces'
+    # mark_failed leaves them.
+    with db:
+        db.execute("UPDATE photos SET state='failed', fail_reason='decode',"
+                   " scanned_at=1 WHERE path=?", (a,))
+        db.execute("UPDATE photos SET state='failed', fail_reason='damaged',"
+                   " scanned_at=1 WHERE path=?", (os.path.join(deep, "deep.jpg"),))
+    out = run(bin_path, conf)
+    assert "total " in out and "retried=1" in out.split("total ", 1)[1], out
+    states = dict(db.execute("SELECT path, state FROM photos").fetchall())
+    assert states[a] == "queued", states
+    assert states[os.path.join(deep, "deep.jpg")] == "failed", states
+    reason = db.execute("SELECT fail_reason FROM photos WHERE path=?",
+                        (a,)).fetchone()[0]
+    assert reason == "decode", reason  # kept: hides old faces until re-processed
+    out = run(bin_path, conf)  # still queued, not retried twice
+    assert "retried=0" in out.split("total ", 1)[1], out
+
     print("test_indexer: all assertions passed")
 
 if __name__ == "__main__":

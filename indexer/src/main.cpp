@@ -112,12 +112,14 @@ int main(int argc, char** argv) {
             c.missing = swept;
             roots_done.push_back(wfi::canonical_root(root));
         }
-        std::printf("root=%s scanned=%ld new=%ld changed=%ld skipped=%ld missing=%ld restored=%ld\n",
+        std::printf("root=%s scanned=%ld new=%ld changed=%ld skipped=%ld missing=%ld restored=%ld"
+                    " retried=%ld\n",
                     root.c_str(), c.scanned, c.added, c.changed, c.skipped, c.missing,
-                    c.restored);
+                    c.restored, c.retried);
         total.scanned += c.scanned; total.added += c.added; total.changed += c.changed;
         total.skipped += c.skipped; total.missing += c.missing;
         total.restored += c.restored;
+        total.retried += c.retried;
     }
 
     // Roots deleted from roots= are never walked, so without this pass
@@ -173,8 +175,9 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "could not persist scan job\n");
         return 1;
     }
-    std::printf("total scanned=%ld new=%ld changed=%ld skipped=%ld missing=%ld restored=%ld\n",
+    std::printf("total scanned=%ld new=%ld changed=%ld skipped=%ld missing=%ld restored=%ld"
+                " retried=%ld\n",
                 total.scanned, total.added, total.changed, total.skipped, total.missing,
-                total.restored);
+                total.restored, total.retried);
     return 0;
 }

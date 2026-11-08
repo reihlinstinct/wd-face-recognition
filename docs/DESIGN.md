@@ -307,12 +307,15 @@ rejoins through the normal re-process path under the standing
 changed-content rule (new content = new faces, #112): a person whose only
 faces were on that photo comes back without the name, while a person with
 other healthy photos keeps it.
-Retry semantics: a failed photo is retried only when its size or mtime
-changes - observe() skips an unchanged failed row, so a content-independent
+Retry semantics (issue #154, INCREMENTAL.md section 4 rule 3): a scan run
+re-queues an unchanged failed photo once, so a content-independent
 failure (an unreadable file reported as `decode`, or a crop-write error)
-keeps its faces hidden until the file changes. Hiding is the privacy-safe
-direction. INCREMENTAL.md section 4 rule 3 (retry once per run) is not
-implemented; tracked in issue #154.
+recovers on the next run without the file changing. `damaged` and
+`too large` are properties of the bytes and wait for a change. Until a
+re-process succeeds, a re-queued failed photo keeps its fail_reason and
+its faces stay hidden - hiding stays the privacy-safe direction. A named
+person whose faces are all hidden stays listed at zero faces, with a
+placeholder card instead of a cover image.
 
 ### Packaging
 - Built in a Debian 11 Bullseye Docker container in CI, following the

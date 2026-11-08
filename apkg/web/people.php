@@ -109,6 +109,8 @@ a.card { display: block; background: #fff; border: 1px solid #ddd;
     border-radius: 6px; padding: .6em; text-decoration: none;
     color: #222; width: 150px; }
 a.card img { width: 100%; border-radius: 4px; background: #eee; }
+a.card .nocover { display: block; width: 100%; aspect-ratio: 1;
+    border-radius: 4px; background: #eee; }
 a.card .name { display: block; font-weight: bold; margin-top: .4em;
     word-break: break-word; }
 a.card .count { display: block; color: #666; font-size: .85em; }

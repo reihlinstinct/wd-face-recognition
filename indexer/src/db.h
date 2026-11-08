@@ -18,6 +18,8 @@ struct ScanCounts {
     long skipped = 0;   // unchanged, reused as-is
     long missing = 0;   // previously known, gone from disk now
     long restored = 0;  // back from missing unchanged, NOT re-queued (#112)
+    long retried = 0;   // unchanged but failed, re-queued for this run's
+                        // one retry (INCREMENTAL.md section 4 rule 3, #154)
 
     bool incomplete = false;    // some dir unreadable: sweep_missing must skip
     bool depth_capped = false;  // walk stopped at max_depth: deeper indexed
@@ -75,7 +77,9 @@ public:
     // Returns 0 skipped (unchanged), 1 added (new), 2 changed (re-queued),
     // 3 restored (back from missing with identical size+mtime - NOT
     // re-queued, so processed face rows and cluster memberships survive,
-    // reviewer #112), or -1 on error.
+    // reviewer #112), 4 retried (unchanged but 'failed' with a reason that
+    // does not come from the bytes: re-queued once per run, issue #154),
+    // or -1 on error.
     int observe(long job_id, const std::string& root, const std::string& path,
                 int64_t size, int64_t mtime, std::string& err);
     // Marks rows not seen by this job (per root) as missing; returns the
@@ -134,7 +138,9 @@ public:
 
     // Every stored face with its embedding, oldest first (cluster input).
     // Faces on missing (#102) or failed (#148) photos are excluded; the
-    // rows stay for reversibility. False on a query error.
+    // rows stay for reversibility. "Failed" includes a failed photo that
+    // is queued again (retry or change) until it re-processes (#154); the
+    // same holds for people_list and person_faces. False on a query error.
     bool all_face_embeddings(std::vector<ClusterFace>& out, std::string& err);
     // Rewrites cluster assignments from computed groups in ONE
     // transaction. Id/name preservation is global max-overlap, not group

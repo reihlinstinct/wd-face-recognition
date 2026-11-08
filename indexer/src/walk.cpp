@@ -79,6 +79,7 @@ bool walk_dir(Db& db, long job_id, const std::string& root, const std::string& a
             if (r == 1) ++c.added;
             else if (r == 2) ++c.changed;
             else if (r == 3) ++c.restored;
+            else if (r == 4) ++c.retried;
             else ++c.skipped;
         }
     }

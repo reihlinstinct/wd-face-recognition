@@ -75,6 +75,17 @@ A photo is (re)processed **only** when:
 3. its `state` is `failed` (retry once per run, then back off), or
 4. `detector_ver`/`embedder_ver` differ from the running models (upgrade).
 
+Rule 3 as implemented (issue #154): each scan run re-queues an unchanged
+`failed` photo once (counted as `retried=` in the run summary). A retry
+that fails again leaves the photo `failed` until the next run - never a
+second attempt in the same run. Failures whose reason is a property of
+the bytes (`damaged`, `too large`) are not retried while the file is
+unchanged: decode is deterministic (section 5), so they wait for rule 2.
+`decode` (which an unreadable file also reports) and `crop write` are
+retried. While a failed photo waits in the queue - for a retry or after a
+change - it keeps its `fail_reason`, so its old faces stay out of people
+search until re-processing succeeds.
+
 Otherwise the photo is **skipped** and its stored faces/embeddings are
 reused. Directory walking is streaming (no whole-library list in RAM, per
 the bounded-everything principle); the mtime/size stat per file is the only
