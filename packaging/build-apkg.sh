@@ -107,7 +107,15 @@ cp "${SERVICE_TARGET_DIR}/x86_64-unknown-linux-musl/release/wdf-service" "${STAG
 
 log "4/4 mksapkg-OS5 (${MODEL})"
 MKSAPKG="$(mktemp)"
-curl -fsSL -o "${MKSAPKG}" "${MKSAPKG_URL}"
+# Retry transient gateway/server errors: on 2026-11-08 five package runs
+# died on a ~120s-then-504 CDN fetch (the models zip in step 2b - fixed
+# in #152/#153), and this mksapkg download is the same class of
+# single-point fetch. --max-time 60 bounds every attempt (the file is a
+# few KB); curl retries a timeout as transient. The pinned sha256 below
+# still guards integrity; retries only ride over transient transport
+# failures.
+curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
+    --connect-timeout 30 --max-time 60 -o "${MKSAPKG}" "${MKSAPKG_URL}"
 echo "${MKSAPKG_SHA256}  ${MKSAPKG}" | sha256sum --check
 chmod +x "${MKSAPKG}"
 
