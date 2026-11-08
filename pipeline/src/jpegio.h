@@ -14,12 +14,16 @@ namespace wfp {
 // indexer worker's 1.5GB RSS budget (DESIGN.md section 2a) on the 4GB
 // PR4100, while a scan never lets one photo squeeze out everything else.
 // Photos above the cap come back empty with *reason = "too large";
-// corrupt/unsupported files give "decode".
+// corrupt/unsupported files give "decode"; files libjpeg can only decode
+// with warnings (truncated or otherwise damaged data) are rejected with
+// "damaged" - partial pixels are never embedded (issue #49, owner
+// decision 2026-11-08).
 constexpr int64_t kDefaultMaxPixels = 50000000;
 
 // Decodes a JPEG to RGB. Returns an empty image on any failure - a bad
 // file must never be fatal to a library scan. When reason is non-null it
-// receives a short machine-stable cause ("too large" / "decode").
+// receives a short machine-stable cause ("too large" / "decode" /
+// "damaged").
 RgbImage decode_jpeg(const std::string& path, std::string* reason = nullptr,
                      int64_t max_pixels = kDefaultMaxPixels);
 

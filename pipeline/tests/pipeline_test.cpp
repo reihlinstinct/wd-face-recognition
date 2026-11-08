@@ -120,6 +120,57 @@ int main() {
         // Encode failure must return false, never crash (crop-write path).
         check(!wfp::encode_jpeg(grad, 64, 64, "/no/such/dir/x.jpg"),
               "encode to a bad dir returns false");
+        // Damaged-file policy (issue #49, owner decision 2026-11-08): a
+        // truncated JPEG decodes with a libjpeg warning and partial pixels;
+        // it must be REJECTED as "damaged", never embedded from partial
+        // pixels. Mutant check: without the warning count this decode
+        // returns a non-empty partial image and the test fails.
+        {
+            const std::string tp = "/tmp/wfp-truncated.jpg";
+            check(wfp::encode_jpeg(grad, 64, 64, tp),
+                  "truncation fixture encodes");
+            std::string bytes;
+            {
+                FILE* rf = std::fopen(tp.c_str(), "rb");
+                check(rf != nullptr, "truncation fixture reopens");
+                if (rf) {
+                    fseek(rf, 0, SEEK_END);
+                    long sz = ftell(rf);
+                    fseek(rf, 0, SEEK_SET);
+                    bytes.resize((size_t)sz);
+                    if (fread(&bytes[0], 1, (size_t)sz, rf) != (size_t)sz)
+                        bytes.clear();
+                    fclose(rf);
+                }
+            }
+            // Cut mid-scan: keep everything past the SOS header plus half
+            // the entropy data, drop the rest (incl. the EOI), so libjpeg
+            // recovers with a premature-EOF warning instead of erroring.
+            size_t sos = bytes.find("\xff\xda");
+            check(sos != std::string::npos, "truncation fixture has SOS");
+            bool cut = false;
+            if (sos != std::string::npos) {
+                const size_t scan = ((unsigned char)bytes[sos + 2] << 8) |
+                                    (unsigned char)bytes[sos + 3];
+                const size_t data = sos + 2 + scan;
+                check(bytes.size() > data + 8, "fixture has entropy data");
+                bytes.resize(data + (bytes.size() - data) / 2);
+                FILE* wf = std::fopen(tp.c_str(), "wb");
+                check(wf != nullptr, "truncated fixture rewrites");
+                if (wf) {
+                    cut = fwrite(bytes.data(), 1, bytes.size(), wf) == bytes.size() &&
+                          fclose(wf) == 0;
+                }
+                check(cut, "truncated fixture written");
+            }
+            if (cut) {
+                std::string treason;
+                wfp::RgbImage timg = wfp::decode_jpeg(tp, &treason);
+                check(timg.pixels.empty() && treason == "damaged",
+                      "truncated jpeg rejected as damaged, not embedded");
+            }
+            std::remove(tp.c_str());
+        }
         // Progressive JPEG over the cap: refused from the header, before
         // jpeg_start_decompress allocates coefficient arrays (CodeRabbit
         // #45). Behavior contract: same "too large" refusal.

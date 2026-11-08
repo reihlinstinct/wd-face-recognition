@@ -285,6 +285,21 @@ photo share:
   real device in milestone 3 before any reliance; a failure here never blocks
   scanning. Sources: WD KB a_id/29819, a_id/30285; community.wd.com/t/photo-index-db/298167.
 
+### Damaged-file policy (issue #49, owner decision 2026-11-08)
+libjpeg recovers from truncated and otherwise damaged JPEGs with a warning
+and yields partial pixels (bottom rows gray/duplicated). An embedding built
+from partial pixels can be wrong-face or weak, and a cluster that absorbs
+it shifts its centroid, polluting future matches. So the decoder REJECTS
+any file libjpeg can only decode with warnings: the error manager counts
+warnings, `decode_jpeg` returns empty with reason `damaged`, and the photo
+is marked `failed` with that fail_reason - out of people search, still
+visible in folder/browse views. Accepted trade-off: camera-broken files
+that warn without meaningful pixel loss are rejected too. Alternatives
+considered and rejected: accept partials silently (cluster pollution);
+accept but mark degraded (most code, ambiguous UX); reject only on
+"material" truncation (libjpeg cannot reliably report how much is
+missing, so the threshold would be guesswork).
+
 ### Packaging
 - Built in a Debian 11 Bullseye Docker container in CI, following the
   jessedp/WD-NAS-App-Builder template (actively maintained, tested on PR4100).

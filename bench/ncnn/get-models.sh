@@ -13,7 +13,13 @@ NCNN_PREFIX="${2:-/tmp/ncnn-build/install}"
 mkdir -p "${OUT}"
 cd "${OUT}"
 if [ ! -f buffalo_s.zip ]; then
-	curl -fsSL -o buffalo_s.zip "${BUFFALO_S_URL}"
+	# Retry transient gateway/server errors: release-assets.githubusercontent
+	# held the connection ~120s and then 504'd on three consecutive package
+	# runs (2026-11-08). The pinned sha256 below guards integrity; retries
+	# only ride over transient transport failures. The package workflow
+	# also caches this zip, so the download normally happens once.
+	curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
+		--connect-timeout 30 -o buffalo_s.zip "${BUFFALO_S_URL}"
 fi
 echo "${BUFFALO_S_SHA256}  buffalo_s.zip" | sha256sum --check
 unzip -o -q buffalo_s.zip det_500m.onnx w600k_mbf.onnx

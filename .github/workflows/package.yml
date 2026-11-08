@@ -62,6 +62,17 @@ jobs:
           path: /tmp/ncnn-build
           key: ncnn-20261020-noavx-v2
 
+      # The insightface buffalo_s.zip download (pinned URL + sha256 in
+      # get-models.sh) is the package job's flakiest fetch: a 504 from the
+      # release-assets CDN failed three consecutive main runs on 2026-11-08.
+      # The zip is content-pinned, so it is a perfect cache candidate; a
+      # hit makes the whole build offline after the ncnn cache.
+      - name: Cache the pinned models zip
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/build/models
+          key: models-${{ hashFiles('bench/ncnn/get-models.sh') }}
+
       - name: Build the apkg package
         run: packaging/build-apkg.sh
 
