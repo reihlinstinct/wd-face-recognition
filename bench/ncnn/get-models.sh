@@ -12,16 +12,29 @@ NCNN_PREFIX="${2:-/tmp/ncnn-build/install}"
 
 mkdir -p "${OUT}"
 cd "${OUT}"
-if [ ! -f buffalo_s.zip ]; then
+fetch() {
 	# Retry transient gateway/server errors: release-assets.githubusercontent
-	# held the connection ~120s and then 504'd on three consecutive package
-	# runs (2026-11-08). The pinned sha256 below guards integrity; retries
-	# only ride over transient transport failures. The package workflow
-	# also caches this zip, so the download normally happens once.
+	# held the connection ~120s AFTER connect and then 504'd on five
+	# package runs (2026-11-08). --connect-timeout does not cover that, so
+	# --max-time bounds every attempt (curl retries a timeout as
+	# transient). The pinned sha256 below guards integrity; retries only
+	# ride over transient transport failures. The package workflow also
+	# caches this zip, so the download normally happens once.
 	curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors \
-		--connect-timeout 30 -o buffalo_s.zip "${BUFFALO_S_URL}"
+		--connect-timeout 30 --max-time 300 -o buffalo_s.zip "${BUFFALO_S_URL}"
+}
+if [ ! -f buffalo_s.zip ]; then
+	fetch
 fi
-echo "${BUFFALO_S_SHA256}  buffalo_s.zip" | sha256sum --check
+# The pinned sha256 is checked on every run, cache hit or not. A cached
+# zip that fails the checksum is deleted and re-downloaded once: a bad
+# cache entry must not wedge every run with this key (Tab, PR #152).
+if ! echo "${BUFFALO_S_SHA256}  buffalo_s.zip" | sha256sum --check; then
+	echo "cached buffalo_s.zip failed sha256; re-downloading" >&2
+	rm -f buffalo_s.zip
+	fetch
+	echo "${BUFFALO_S_SHA256}  buffalo_s.zip" | sha256sum --check
+fi
 unzip -o -q buffalo_s.zip det_500m.onnx w600k_mbf.onnx
 
 # det_500m.onnx has dynamic H/W with Shape/Gather/Unsqueeze/Resize chains that
