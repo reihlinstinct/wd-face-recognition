@@ -299,6 +299,20 @@ considered and rejected: accept partials silently (cluster pollution);
 accept but mark degraded (most code, ambiguous UX); reject only on
 "material" truncation (libjpeg cannot reliably report how much is
 missing, so the threshold would be guesswork).
+A photo that was indexed while healthy and FAILS a later re-scan keeps its
+old face rows but drops out of people search and identity rebuilds
+(issue #148, same hidden-but-kept semantics as a missing root): while the
+photo is failed, its cluster keeps its id and name. A repaired file
+rejoins through the normal re-process path under the standing
+changed-content rule (new content = new faces, #112): a person whose only
+faces were on that photo comes back without the name, while a person with
+other healthy photos keeps it.
+Retry semantics: a failed photo is retried only when its size or mtime
+changes - observe() skips an unchanged failed row, so a content-independent
+failure (an unreadable file reported as `decode`, or a crop-write error)
+keeps its faces hidden until the file changes. Hiding is the privacy-safe
+direction. INCREMENTAL.md section 4 rule 3 (retry once per run) is not
+implemented; tracked in issue #154.
 
 ### Packaging
 - Built in a Debian 11 Bullseye Docker container in CI, following the
