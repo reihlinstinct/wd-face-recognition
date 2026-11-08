@@ -13,6 +13,15 @@ const char* kEmbedderVersion = "mobilefacenet-int8";
 
 namespace {
 
+// Failure reasons that are a property of the file's bytes (issue #154):
+// decode is deterministic (INCREMENTAL.md section 5), so the same bytes
+// fail the same way on every retry - such a photo waits for a change.
+// Everything else ("decode", which an unreadable file also reports, and
+// "crop write") may be transient and is retried once per run.
+bool retry_unchanged(const std::string& reason) {
+    return reason != "damaged" && reason != "too large";
+}
+
 const char* kSchema = R"SQL(
 PRAGMA journal_mode=WAL;
 PRAGMA secure_delete=ON;
@@ -229,7 +238,8 @@ int Db::observe(long job_id, const std::string& root, const std::string& path,
     // Read-then-write (SQLite 3.34 on the NAS has no RETURNING): the prior
     // row decides whether this observation is new / changed / unchanged.
     sqlite3_stmt* q = nullptr;
-    const char* sel = "SELECT size, mtime, state FROM photos WHERE path = ?";
+    const char* sel =
+        "SELECT size, mtime, state, COALESCE(fail_reason, '') FROM photos WHERE path = ?";
     if (sqlite3_prepare_v2(db_, sel, -1, &q, nullptr) != SQLITE_OK) {
         err = sqlite3_errmsg(db_);
         return -1;
@@ -241,26 +251,44 @@ int Db::observe(long job_id, const std::string& root, const std::string& path,
     int64_t old_mtime = existed ? sqlite3_column_int64(q, 1) : 0;
     std::string old_state = existed
         ? std::string((const char*)sqlite3_column_text(q, 2)) : "";
+    std::string old_reason = existed
+        ? std::string((const char*)sqlite3_column_text(q, 3)) : "";
     sqlite3_finalize(q);
     if (!existed && rc != SQLITE_DONE) {
         err = sqlite3_errmsg(db_);
         return -1;
     }
 
-    int outcome;  // 0 skipped, 1 added, 2 changed, 3 restored
+    int outcome;  // 0 skipped, 1 added, 2 changed, 3 restored, 4 retried
     if (!existed) {
         outcome = 1;
     } else if (old_state == "missing" && old_size == size && old_mtime == mtime) {
         outcome = 3;
     } else if (old_size != size || old_mtime != mtime || old_state == "missing") {
         outcome = 2;
+    } else if (old_state == "failed" && retry_unchanged(old_reason)) {
+        outcome = 4;
     } else {
         outcome = 0;
     }
 
     sqlite3_stmt* st = nullptr;
     bool ok;
-    if (outcome == 0) {
+    if (outcome == 4) {
+        // Retry once per run (INCREMENTAL.md section 4 rule 3, #154): the
+        // walk observes each path once per run, and a retry that fails
+        // again leaves the photo 'failed' until the next run's observe.
+        // fail_reason and scanned_at are KEPT: fail_reason marks the old
+        // face rows as the failed version's leftovers, so they stay out
+        // of people search until replace_faces succeeds and clears it.
+        const char* sql =
+            "UPDATE photos SET state = 'queued', last_seen_job = ? WHERE path = ?";
+        ok = sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) == SQLITE_OK;
+        if (ok) {
+            sqlite3_bind_int64(st, 1, job_id);
+            sqlite3_bind_text(st, 2, path.c_str(), -1, SQLITE_TRANSIENT);
+        }
+    } else if (outcome == 0) {
         const char* sql = "UPDATE photos SET last_seen_job = ? WHERE path = ?";
         ok = sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) == SQLITE_OK;
         if (ok) {
@@ -292,14 +320,17 @@ int Db::observe(long job_id, const std::string& root, const std::string& path,
         }
     } else {
         // New or changed (or back from missing): (re)queue for processing,
-        // clearing the previous scan stamp so the pipeline redoes it.
+        // clearing the previous scan stamp so the pipeline redoes it. A
+        // previous fail_reason is kept (issue #154): a failed photo's old
+        // face rows stay hidden while it waits in the queue, and only a
+        // successful replace_faces (which clears it) brings faces back.
         const char* sql =
             "INSERT INTO photos(root, path, size, mtime, state, detector_ver,"
             "                   embedder_ver, last_seen_job)"
             " VALUES(?, ?, ?, ?, 'queued', ?, ?, ?)"
             " ON CONFLICT(path) DO UPDATE SET"
             "   root = excluded.root, size = excluded.size, mtime = excluded.mtime,"
-            "   state = 'queued', scanned_at = NULL, fail_reason = NULL,"
+            "   state = 'queued', scanned_at = NULL,"
             "   detector_ver = excluded.detector_ver,"
             "   embedder_ver = excluded.embedder_ver,"
             "   last_seen_job = excluded.last_seen_job";
@@ -575,11 +606,14 @@ bool Db::all_face_embeddings(std::vector<ClusterFace>& out, std::string& err) {
     // #102); faces of FAILED photos are out too (issue #148): a re-queued
     // photo that now fails decode keeps its old face rows, and those stale
     // faces must not drive new clusters. The rows stay (reversible), the
-    // cluster input skips them.
+    // cluster input skips them. A failed photo re-queued for a retry or
+    // after a change still carries its fail_reason (issue #154) and stays
+    // out until replace_faces succeeds.
     if (sqlite3_prepare_v2(db_,
             "SELECT f.id, f.photo_id, f.embedding FROM faces f"
             " JOIN photos p ON p.id = f.photo_id"
-            " WHERE p.state NOT IN ('missing','failed') ORDER BY f.id",
+            " WHERE p.state NOT IN ('missing','failed') AND p.fail_reason IS NULL"
+            " ORDER BY f.id",
                            -1, &st, nullptr) != SQLITE_OK) {
         err = sqlite3_errmsg(db_);
         return false;
@@ -736,9 +770,11 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
         // the cluster input, they must not be detached - the stored
         // cluster_id is what lets a restored root or a repaired file
         // rejoin the same person below (the face_cluster map reads them).
+        // A failed photo queued for a retry counts as failed (#154).
         if (sqlite3_exec(db_,
                 "UPDATE faces SET cluster_id = NULL WHERE photo_id IN"
-                " (SELECT id FROM photos WHERE state NOT IN ('missing','failed'))",
+                " (SELECT id FROM photos WHERE state NOT IN ('missing','failed')"
+                "  AND fail_reason IS NULL)",
                 nullptr, nullptr, nullptr) != SQLITE_OK)
             break;
         // Drop live clusters no group kept - EXCEPT a cluster whose
@@ -754,7 +790,8 @@ bool Db::replace_clusters(const std::vector<std::vector<long>>& groups,
                 if (sqlite3_prepare_v2(db_,
                         "SELECT DISTINCT f.cluster_id FROM faces f"
                         " JOIN photos p ON p.id = f.photo_id"
-                        " WHERE p.state IN ('missing','failed') AND f.cluster_id IS NOT NULL",
+                        " WHERE (p.state IN ('missing','failed') OR p.fail_reason IS NOT NULL)"
+                        " AND f.cluster_id IS NOT NULL",
                         -1, &pst, nullptr) != SQLITE_OK) {
                     step_ok = false;
                 } else {
@@ -864,14 +901,17 @@ bool Db::people_list(std::vector<PersonSummary>& out, std::string& err) {
     sqlite3_stmt* st = nullptr;
     const char* sql =
         // Faces of missing (root removal, #102) or failed (issue #148)
-        // photos count for nothing identity-shaped; the rows stay, so a
-        // restored root or repaired file rejoins.
+        // photos count for nothing identity-shaped, including a failed
+        // photo queued for a retry (fail_reason still set, #154); the rows
+        // stay, so a restored root or repaired file rejoins.
         "SELECT c.id, COALESCE(c.name, ''),"
         " (SELECT count(*) FROM faces f JOIN photos fp ON fp.id = f.photo_id"
-        "  WHERE f.cluster_id = c.id AND fp.state NOT IN ('missing','failed')),"
+        "  WHERE f.cluster_id = c.id AND fp.state NOT IN ('missing','failed')"
+        "  AND fp.fail_reason IS NULL),"
         " COALESCE((SELECT f2.crop_path FROM faces f2"
         "          JOIN photos fp2 ON fp2.id = f2.photo_id"
         "          WHERE f2.cluster_id = c.id AND fp2.state NOT IN ('missing','failed')"
+        "          AND fp2.fail_reason IS NULL"
         "          ORDER BY f2.id LIMIT 1), '')"
         " FROM clusters c WHERE c.merged_into IS NULL"
         " ORDER BY 3 DESC, c.id";
@@ -911,6 +951,7 @@ bool Db::person_faces(long cluster_id, std::vector<PersonFace>& out,
         "SELECT f.id, f.bbox, f.crop_path, p.path"
         " FROM faces f JOIN photos p ON p.id = f.photo_id"
         " WHERE f.cluster_id = ? AND p.state NOT IN ('missing','failed')"
+        " AND p.fail_reason IS NULL"
         " ORDER BY p.path, f.id";
     if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
         err = sqlite3_errmsg(db_);

@@ -956,6 +956,14 @@ int main() {
         check(fc3.changed == 1, "repaired cat re-queued");
         check(fdb.queued_photos(100, fq, err) && fq.size() == 1,
               "repaired cat in the queue");
+        // Queued is not repaired yet (issue #154): until re-processing
+        // succeeds, the photo's OLD face rows are still the broken
+        // version's leftovers and stay out of people search.
+        check(fdb.all_face_embeddings(emb, err) && emb.empty(),
+              "re-queued failed photo stays hidden until processed");
+        check(fdb.people_list(fpl, err) && fpl.size() == 1 &&
+                  fpl[0].face_count == 0,
+              "re-queued failed photo counts for nothing yet");
         {
             std::vector<std::string> oc;
             bool cf = true;
@@ -967,7 +975,243 @@ int main() {
         check(fdb.people_list(fpl, err) && fpl.size() == 1 &&
                   fpl[0].face_count == 1,
               "repaired photo's face back in people search");
+        // The name outcome is pinned (issue #154): the repair wrote NEW
+        // face rows, and under #112's changed-content rule a person whose
+        // only faces were on the repaired photo re-forms unnamed.
+        check(fpl.size() == 1 && fpl[0].name.empty() &&
+                  fpl[0].cover_crop == cfr.crop_path,
+              "one-photo person re-forms unnamed after repair");
         // fdb closes at scope end (destructor).
+    }
+
+    // Repair identity with other healthy photos (issue #154): a person on
+    // two photos, one of which fails. The count drops by one, the cover
+    // moves to the healthy face, the person page lists only that face,
+    // and the name survives both the failure and the repair (the healthy
+    // face carries the overlap claim, #112).
+    {
+        const std::string edata = tmp + "/edata";
+        const std::string eroot = tmp + "/eroot";
+        check(mkdir(edata.c_str(), 0700) == 0, "#154 two-photo data dir");
+        check(mkdir(eroot.c_str(), 0700) == 0, "#154 two-photo root dir");
+        wfi::Db edb;
+        check(edb.open(edata + "/index.db", err), "#154 two-photo db opens");
+        // e1 sorts first, so its face row gets the lower id and is the
+        // cover while healthy.
+        write_file(eroot + "/e1.jpg", "eve-one");
+        write_file(eroot + "/e2.jpg", "eve-two");
+        long je1 = edb.begin_job(eroot);
+        wfi::ScanCounts ec1;
+        check(wfi::scan_root(edb, je1, eroot, 8, ec1, err) && ec1.added == 2,
+              "both eve photos queued");
+        std::vector<wfi::QueuedPhoto> eq;
+        check(edb.queued_photos(100, eq, err) && eq.size() == 2,
+              "both eve photos in the queue");
+        wfi::FaceRow ef1, ef2;
+        ef1.bbox = ef2.bbox = "0,0,1,1";
+        ef1.embedding = ef2.embedding = {0.6f, 0.8f};
+        ef1.crop_path = "crops/e1_f0.jpg";
+        ef2.crop_path = "crops/e2_f0.jpg";
+        for (size_t i = 0; i < eq.size(); ++i) {
+            std::vector<std::string> oc;
+            bool cf = true;
+            check(edb.replace_faces(eq[i].id, eq[i].size, eq[i].mtime,
+                                    {i == 0 ? ef1 : ef2}, oc, cf, err) && !cf,
+                  "eve photo processed");
+        }
+        wfi::ClusterCounts ecc;
+        check(wfi::recluster(edb, 0.5, ecc, err) && ecc.people == 1,
+              "eve's two faces form one person");
+        std::vector<wfi::PersonSummary> epl;
+        check(edb.people_list(epl, err) && epl.size() == 1 &&
+                  epl[0].face_count == 2 && epl[0].cover_crop == ef1.crop_path,
+              "eve listed with 2 faces, e1 covers");
+        const long eve = epl[0].id;
+        check(edb.rename_cluster(eve, "Eve", err), "eve named");
+
+        // e1 corrupts and fails re-processing.
+        write_file(eroot + "/e1.jpg", "eve-one-corrupted");
+        long je2 = edb.begin_job(eroot);
+        wfi::ScanCounts ec2;
+        check(wfi::scan_root(edb, je2, eroot, 8, ec2, err) && ec2.changed == 1,
+              "corrupted e1 re-queued");
+        check(edb.queued_photos(100, eq, err) && eq.size() == 1,
+              "e1 alone in the queue");
+        {
+            bool cf = true;
+            check(edb.mark_failed(eq[0].id, eq[0].size, eq[0].mtime,
+                                  "damaged", cf, err) && !cf,
+                  "e1 marked failed");
+        }
+        for (int pass = 0; pass < 2; ++pass) {  // before and after a rebuild
+            if (pass == 1)
+                check(wfi::recluster(edb, 0.5, ecc, err), "rebuild over failed e1");
+            check(edb.people_list(epl, err) && epl.size() == 1 &&
+                      epl[0].id == eve && epl[0].name == "Eve" &&
+                      epl[0].face_count == 1 &&
+                      epl[0].cover_crop == ef2.crop_path,
+                  "one failed photo: count drops by one, cover moves to e2");
+            std::vector<wfi::PersonFace> epf;
+            check(edb.person_faces(eve, epf, err) && epf.size() == 1 &&
+                      epf[0].crop_path == ef2.crop_path &&
+                      epf[0].photo_path == eroot + "/e2.jpg",
+                  "person page lists only the healthy face");
+        }
+
+        // e1 repaired: new face rows rejoin Eve through e2's claim.
+        write_file(eroot + "/e1.jpg", "eve-one-repaired");
+        long je3 = edb.begin_job(eroot);
+        wfi::ScanCounts ec3;
+        check(wfi::scan_root(edb, je3, eroot, 8, ec3, err) && ec3.changed == 1,
+              "repaired e1 re-queued");
+        check(edb.queued_photos(100, eq, err) && eq.size() == 1,
+              "repaired e1 in the queue");
+        wfi::FaceRow ef1b = ef1;
+        ef1b.crop_path = "crops/e1_f0b.jpg";
+        {
+            std::vector<std::string> oc;
+            bool cf = true;
+            check(edb.replace_faces(eq[0].id, eq[0].size, eq[0].mtime, {ef1b},
+                                    oc, cf, err) && !cf,
+                  "repaired e1 re-processed");
+        }
+        check(wfi::recluster(edb, 0.5, ecc, err), "rebuild after e1 repair");
+        check(edb.people_list(epl, err) && epl.size() == 1 &&
+                  epl[0].id == eve && epl[0].name == "Eve" &&
+                  epl[0].face_count == 2,
+              "person with other healthy photos keeps the name after repair");
+    }
+
+    // Failed-photo retry (issue #154, INCREMENTAL.md section 4 rule 3):
+    // an UNCHANGED failed photo is re-queued once per scan run, unless
+    // its failure reason is a property of the bytes themselves. While
+    // the retry is pending its old faces stay hidden; a retry that fails
+    // again waits for the next run; a retry that succeeds rejoins.
+    {
+        const std::string tdata = tmp + "/tdata";
+        const std::string troot = tmp + "/troot";
+        check(mkdir(tdata.c_str(), 0700) == 0, "#154 retry data dir");
+        check(mkdir(troot.c_str(), 0700) == 0, "#154 retry root dir");
+        wfi::Db tdb;
+        check(tdb.open(tdata + "/index.db", err), "#154 retry db opens");
+        write_file(troot + "/dog.jpg", "dog-bytes");
+        write_file(troot + "/dmg.jpg", "damaged-bytes");
+        write_file(troot + "/big.jpg", "too-large-bytes");
+        long jt1 = tdb.begin_job(troot);
+        wfi::ScanCounts tc1;
+        check(wfi::scan_root(tdb, jt1, troot, 8, tc1, err) && tc1.added == 3,
+              "retry fixtures queued");
+        std::vector<wfi::QueuedPhoto> tq;
+        check(tdb.queued_photos(100, tq, err) && tq.size() == 3,
+              "retry fixtures in the queue");  // big, dmg, dog (path order)
+        wfi::FaceRow dfr;
+        dfr.bbox = "0,0,1,1";
+        dfr.embedding = {1.0f, 0.0f};
+        dfr.crop_path = "crops/dog_f0.jpg";
+        for (const wfi::QueuedPhoto& q : tq) {
+            bool cf = true;
+            if (q.path == troot + "/dog.jpg") {
+                std::vector<std::string> oc;
+                check(tdb.replace_faces(q.id, q.size, q.mtime, {dfr}, oc, cf,
+                                        err) && !cf,
+                      "dog processed");
+            } else {
+                // Content-determined failures: the same bytes fail the
+                // same way on every decode.
+                check(tdb.mark_failed(q.id, q.size, q.mtime,
+                                      q.path == troot + "/dmg.jpg" ? "damaged"
+                                                                   : "too large",
+                                      cf, err) && !cf,
+                      "content-determined failure recorded");
+            }
+        }
+        wfi::ClusterCounts tcc;
+        check(wfi::recluster(tdb, 0.5, tcc, err) && tcc.people == 1, "dog clustered");
+        std::vector<wfi::PersonSummary> tpl;
+        check(tdb.people_list(tpl, err) && tpl.size() == 1, "dog listed");
+        const long dog = tpl[0].id;
+        check(tdb.rename_cluster(dog, "Dog", err), "dog named");
+
+        // dog.jpg is touched (re-queued as changed) and then hits a
+        // content-independent failure: "decode" is also what an
+        // unreadable file (fopen error) reports.
+        struct utimbuf dut;
+        dut.actime = dut.modtime = 1700000000;
+        check(utime((troot + "/dog.jpg").c_str(), &dut) == 0, "dog touched");
+        long jt2 = tdb.begin_job(troot);
+        wfi::ScanCounts tc2;
+        check(wfi::scan_root(tdb, jt2, troot, 8, tc2, err) && tc2.changed == 1,
+              "touched dog re-queued");
+        check(tdb.queued_photos(100, tq, err) && tq.size() == 1, "dog queued");
+        {
+            bool cf = true;
+            check(tdb.mark_failed(tq[0].id, tq[0].size, tq[0].mtime, "decode",
+                                  cf, err) && !cf,
+                  "dog fails with a content-independent reason");
+        }
+
+        // Next run, nothing changed on disk: dog is retried, the two
+        // content-determined failures are not.
+        long jt3 = tdb.begin_job(troot);
+        wfi::ScanCounts tc3;
+        check(wfi::scan_root(tdb, jt3, troot, 8, tc3, err), "unchanged walk");
+        check(tdb.queued_photos(100, tq, err) && tq.size() == 1 &&
+                  tq[0].path == troot + "/dog.jpg",
+              "unchanged failed photo re-queued for one retry (rule 3)");
+        check(tc3.retried == 1 && tc3.skipped == 2 && tc3.changed == 0 &&
+                  tc3.added == 0,
+              "retry counted as retried, damaged/too large skipped");
+        // Pending retry: still hidden, identity still protected.
+        std::vector<wfi::ClusterFace> temb;
+        check(tdb.all_face_embeddings(temb, err) && temb.empty(),
+              "pending retry stays out of the cluster input");
+        check(wfi::recluster(tdb, 0.5, tcc, err), "rebuild with retry pending");
+        check(tdb.people_list(tpl, err) && tpl.size() == 1 && tpl[0].id == dog &&
+                  tpl[0].name == "Dog" && tpl[0].face_count == 0 &&
+                  tpl[0].cover_crop.empty(),
+              "pending retry counts for nothing, identity kept");
+        std::vector<wfi::PersonFace> tpf;
+        check(tdb.person_faces(dog, tpf, err) && tpf.empty(),
+              "pending retry off the person page");
+
+        // The retry fails again: back to failed, and NOT retried a second
+        // time in the same run.
+        {
+            bool cf = true;
+            check(tdb.mark_failed(tq[0].id, tq[0].size, tq[0].mtime, "decode",
+                                  cf, err) && !cf,
+                  "retry fails again");
+        }
+        check(tdb.queued_photos(100, tq, err) && tq.empty(),
+              "a failed retry waits for the next run");
+        check(tdb.all_face_embeddings(temb, err) && temb.empty(),
+              "failed retry stays hidden");
+
+        // The following run retries once more, and this time it works.
+        long jt4 = tdb.begin_job(troot);
+        wfi::ScanCounts tc4;
+        check(wfi::scan_root(tdb, jt4, troot, 8, tc4, err) && tc4.retried == 1,
+              "next run retries again");
+        check(tdb.queued_photos(100, tq, err) && tq.size() == 1, "dog queued again");
+        {
+            std::vector<std::string> oc;
+            bool cf = true;
+            check(tdb.replace_faces(tq[0].id, tq[0].size, tq[0].mtime, {dfr}, oc,
+                                    cf, err) && !cf,
+                  "retry succeeds");
+        }
+        check(wfi::recluster(tdb, 0.5, tcc, err), "rebuild after a good retry");
+        check(tdb.people_list(tpl, err) && tpl.size() == 1 &&
+                  tpl[0].face_count == 1 && tpl[0].cover_crop == dfr.crop_path,
+              "successful retry rejoins people search");
+
+        // Healthy again: the next unchanged run skips everything.
+        long jt5 = tdb.begin_job(troot);
+        wfi::ScanCounts tc5;
+        check(wfi::scan_root(tdb, jt5, troot, 8, tc5, err) &&
+                  tc5.retried == 0 && tc5.skipped == 3,
+              "nothing left to retry");
+        check(tdb.queued_photos(100, tq, err) && tq.empty(), "queue empty");
     }
 
     // --threshold parsing (issue #67): validated strtod, finite, [-1,1].

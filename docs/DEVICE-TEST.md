@@ -110,7 +110,8 @@ real-hardware go/no-go data for milestone M2.
 3. Save an EMPTY list: accepted (the shipped privacy default - the
    indexer walks nothing). After the next indexer run, any previously
    indexed photos are `missing` and their faces drop out of the People
-   counts - named people stay listed at zero faces, nothing is deleted.
+   counts - named people stay listed at zero faces (a plain grey
+   placeholder instead of a cover photo), nothing is deleted.
 4. Re-add the real folder and run the indexer (or wait for its schedule):
    the next run scans exactly the configured roots, and unchanged
    missing photos return WITHOUT re-processing (the summary line counts
