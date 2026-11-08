@@ -133,7 +133,8 @@ public:
     // --- People (issue #40 PR 3) ---
 
     // Every stored face with its embedding, oldest first (cluster input).
-    // False on a query error.
+    // Faces on missing (#102) or failed (#148) photos are excluded; the
+    // rows stay for reversibility. False on a query error.
     bool all_face_embeddings(std::vector<ClusterFace>& out, std::string& err);
     // Rewrites cluster assignments from computed groups in ONE
     // transaction. Id/name preservation is global max-overlap, not group
@@ -144,9 +145,11 @@ public:
     bool replace_clusters(const std::vector<std::vector<long>>& groups,
                           std::string& err);
     // People page: live clusters, most faces first, cover = first face's
-    // crop. False on a query error.
+    // crop. Faces on missing (#102) or failed (#148) photos count for
+    // nothing and never cover. False on a query error.
     bool people_list(std::vector<PersonSummary>& out, std::string& err);
-    // Person page: one cluster's faces with their photo paths.
+    // Person page: one cluster's faces with their photo paths, excluding
+    // faces on missing (#102) or failed (#148) photos.
     // False on a query error (an unknown id is NOT an error, just empty).
     bool person_faces(long cluster_id, std::vector<PersonFace>& out,
                       std::string& err);

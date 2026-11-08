@@ -864,6 +864,112 @@ int main() {
         // rdb closes at scope end (destructor).
     }
 
+    // Failed photos' faces hide from people search but keep identity
+    // (issue #148, mirroring the #102 missing semantics): a scanned photo
+    // whose file corrupts is re-queued, fails re-processing, and its OLD
+    // face rows must stop driving search and rebuilds while the cluster
+    // keeps its id and name for reversibility.
+    {
+        const std::string fdata = tmp + "/fdata";
+        const std::string froot = tmp + "/froot";
+        check(mkdir(fdata.c_str(), 0700) == 0, "#148 data dir");
+        check(mkdir(froot.c_str(), 0700) == 0, "#148 root dir");
+        wfi::Db fdb;
+        check(fdb.open(fdata + "/index.db", err), "#148 db opens");
+
+        write_file(froot + "/cat.jpg", "cat-bytes");
+        struct stat cst;
+        check(stat((froot + "/cat.jpg").c_str(), &cst) == 0, "cat stat");
+        long jobc1 = fdb.begin_job(froot);
+        check(fdb.observe(jobc1, froot, froot + "/cat.jpg",
+                          (int64_t)cst.st_size, (int64_t)cst.st_mtime,
+                          err) == 1,
+              "cat queued by the scan");
+        check(fdb.flush(), "cat batch committed");
+        std::vector<wfi::QueuedPhoto> fq;
+        check(fdb.queued_photos(100, fq, err) && fq.size() == 1,
+              "cat alone in the queue");
+        wfi::FaceRow cfr;
+        cfr.bbox = "0,0,1,1";
+        cfr.embedding = {0.3f, 1.2f};
+        cfr.crop_path = "crops/cat_f0.jpg";
+        {
+            std::vector<std::string> oc;
+            bool cf = true;
+            check(fdb.replace_faces(fq[0].id, fq[0].size, fq[0].mtime, {cfr},
+                                    oc, cf, err) && !cf,
+                  "cat processed through replace_faces");
+        }
+        wfi::ClusterCounts ccc;
+        check(wfi::recluster(fdb, 0.5, ccc, err) && ccc.people == 1,
+              "cat clustered");
+        std::vector<wfi::PersonSummary> fpl;
+        check(fdb.people_list(fpl, err) && fpl.size() == 1, "cat listed");
+        const long cat_cid = fpl[0].id;
+        check(fdb.rename_cluster(cat_cid, "Cat", err), "cat named Cat");
+
+        // The file corrupts on disk: re-queued as changed, then fails
+        // re-processing - the OLD face rows are still in the faces table.
+        write_file(froot + "/cat.jpg", "cat-bytes-corrupted-longer");
+        long jobc2 = fdb.begin_job(froot);
+        wfi::ScanCounts fc2;
+        check(wfi::scan_root(fdb, jobc2, froot, 8, fc2, err), "corrupt walk");
+        check(fc2.changed == 1, "corrupted cat re-queued");
+        check(fdb.queued_photos(100, fq, err) && fq.size() == 1,
+              "corrupted cat in the queue");
+        {
+            bool cf = true;
+            check(fdb.mark_failed(fq[0].id, fq[0].size, fq[0].mtime,
+                                  "damaged", cf, err) && !cf,
+                  "corrupted cat marked failed");
+        }
+
+        // Hidden from every people-search read (the #148 mutant: without
+        // the NOT IN ('missing','failed') filters each of these still
+        // returns the stale face).
+        std::vector<wfi::ClusterFace> emb;
+        check(fdb.all_face_embeddings(emb, err) && emb.empty(),
+              "failed photo's face out of the cluster input");
+        check(fdb.people_list(fpl, err) && fpl.size() == 1 &&
+                  fpl[0].face_count == 0 && fpl[0].cover_crop.empty(),
+              "failed photo's face counts for nothing and never covers");
+        std::vector<wfi::PersonFace> pfs;
+        check(fdb.person_faces(cat_cid, pfs, err) && pfs.empty(),
+              "failed photo's face off the person page");
+
+        // Identity survives a rebuild while failed: the cluster is
+        // protected like a missing-root one, so id and name persist.
+        check(wfi::recluster(fdb, 0.5, ccc, err), "rebuild over failed photo");
+        check(fdb.people_list(fpl, err) && fpl.size() == 1 &&
+                  fpl[0].id == cat_cid && fpl[0].name == "Cat" &&
+                  fpl[0].face_count == 0,
+              "failed photo's cluster keeps id and name");
+
+        // Repair: healthy new bytes re-queue (changed), replace_faces swaps
+        // the rows, and the face is back in people search. Identity
+        // re-forms per the standing changed-content rule (new content =
+        // new faces, issue #112's lifecycle above).
+        write_file(froot + "/cat.jpg", "cat-bytes-repaired");
+        long jobc3 = fdb.begin_job(froot);
+        wfi::ScanCounts fc3;
+        check(wfi::scan_root(fdb, jobc3, froot, 8, fc3, err), "repair walk");
+        check(fc3.changed == 1, "repaired cat re-queued");
+        check(fdb.queued_photos(100, fq, err) && fq.size() == 1,
+              "repaired cat in the queue");
+        {
+            std::vector<std::string> oc;
+            bool cf = true;
+            check(fdb.replace_faces(fq[0].id, fq[0].size, fq[0].mtime, {cfr},
+                                    oc, cf, err) && !cf,
+                  "repaired cat re-processed");
+        }
+        check(wfi::recluster(fdb, 0.5, ccc, err), "rebuild after repair");
+        check(fdb.people_list(fpl, err) && fpl.size() == 1 &&
+                  fpl[0].face_count == 1,
+              "repaired photo's face back in people search");
+        // fdb closes at scope end (destructor).
+    }
+
     // --threshold parsing (issue #67): validated strtod, finite, [-1,1].
     {
         double th = 99.0;
