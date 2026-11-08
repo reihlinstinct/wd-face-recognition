@@ -131,14 +131,22 @@ function wdf_cover_basename(string $cover): string
 }
 
 // Render helpers, kept pure so the tests can assert escaping.
+// A person whose faces all sit on missing or failed photos (#102, #148)
+// comes with an empty cover: render a placeholder, not an <img> whose
+// crop.php?f= request can only 404 (issue #154).
 function wdf_person_card_html(array $p): string
 {
     $id = (int)$p['id'];
     $label = htmlspecialchars(wdf_person_label($p), ENT_QUOTES, 'UTF-8');
-    $cover = htmlspecialchars(wdf_cover_basename($p['cover']), ENT_QUOTES, 'UTF-8');
     $faces = (int)$p['faces'];
+    if ($p['cover'] === '') {
+        $img = '<span class="nocover" aria-hidden="true"></span>';
+    } else {
+        $cover = htmlspecialchars(wdf_cover_basename($p['cover']), ENT_QUOTES, 'UTF-8');
+        $img = '<img src="crop.php?f=' . $cover . '" alt="" loading="lazy">';
+    }
     return '<a class="card" href="person.php?id=' . $id . '">'
-        . '<img src="crop.php?f=' . $cover . '" alt="" loading="lazy">'
+        . $img
         . '<span class="name">' . $label . '</span>'
         . '<span class="count">' . $faces . ' faces</span></a>';
 }

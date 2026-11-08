@@ -167,10 +167,9 @@ bool process_queued(Db& db, const std::string& models_dir,
             // A photo with partial output must not be recorded as scanned
             // (CodeRabbit #45): mark it failed so the miss is visible, and
             // drop this run's staged crops (never referenced by any row).
-            // The photo leaves the queue in state 'failed'; a later scan
-            // re-queues it only when the file changes - retrying transient
-            // I/O failures is the operator's call (or a future
-            // retry-failed command).
+            // The photo leaves the queue in state 'failed'; the next scan
+            // re-queues it once for a retry even if the file is unchanged
+            // (INCREMENTAL.md section 4 rule 3, issue #154).
             for (const std::string& c : new_crops)
                 if (safe_crop_rel(c)) unlink((data_dir + "/" + c).c_str());
             bool conflict = false;
