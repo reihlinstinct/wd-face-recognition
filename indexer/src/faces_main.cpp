@@ -21,9 +21,45 @@
 
 #define WFF_VERSION "0.3.0-dev"
 
+namespace {
+
+// One usage block for both paths: on stderr with exit 2 for bad
+// arguments, inside the --help text on stdout with exit 0 (issue #131).
+const char kUsage[] =
+    "usage: wdf_faces process --config FILE [--models DIR] [--limit N] [--threads N]\n"
+    "       wdf_faces cluster --config FILE [--threshold 0.5]\n"
+    "       wdf_faces people --config FILE\n"
+    "       wdf_faces person --config FILE --id N\n"
+    "       wdf_faces rename --config FILE --id N --name NAME\n"
+    "       wdf_faces merge --config FILE --from N --to N\n"
+    "       wdf_faces gc --config FILE\n";
+
+const char kHelpBody[] =
+    "       wdf_faces --help | --version\n"
+    "\n"
+    "Face-processing daemon for the index: processes the photos wdf_indexer\n"
+    "queued, clusters faces into people, and backs the people pages.\n"
+    "\n"
+    "  process   detect, embed and crop faces of queued photos (default --limit 500)\n"
+    "  cluster   rebuild cluster assignments from stored embeddings\n"
+    "  people    print the people list as JSON (read-only, no lock)\n"
+    "  person    print one person's faces as JSON (read-only, no lock)\n"
+    "  rename    set a person's name\n"
+    "  merge     merge person --from into person --to\n"
+    "  gc        remove crop files the index no longer references\n"
+    "  -h, --help   show this help and exit\n"
+    "  --version    print the version and exit\n";
+
+}  // namespace
+
 int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "--version") == 0) {
         std::printf("wdf_faces %s\n", WFF_VERSION);
+        return 0;
+    }
+    if (argc >= 2 && (std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0)) {
+        std::fputs(kUsage, stdout);
+        std::fputs(kHelpBody, stdout);
         return 0;
     }
     const std::string cmd = argc >= 2 ? argv[1] : "";
@@ -31,14 +67,7 @@ int main(int argc, char** argv) {
     const bool is_write = cmd == "rename" || cmd == "merge";
     if (argc < 3 || (cmd != "process" && cmd != "cluster" && cmd != "gc" &&
                      !is_read && !is_write)) {
-        std::fprintf(stderr,
-            "usage: wdf_faces process --config FILE [--models DIR] [--limit N] [--threads N]\n"
-            "       wdf_faces cluster --config FILE [--threshold 0.5]\n"
-            "       wdf_faces people --config FILE\n"
-            "       wdf_faces person --config FILE --id N\n"
-            "       wdf_faces rename --config FILE --id N --name NAME\n"
-            "       wdf_faces merge --config FILE --from N --to N\n"
-            "       wdf_faces gc --config FILE\n");
+        std::fputs(kUsage, stderr);
         return 2;
     }
     const bool is_cluster = cmd == "cluster";

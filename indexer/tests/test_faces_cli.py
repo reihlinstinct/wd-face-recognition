@@ -37,6 +37,12 @@ r = run("bogus", "x")
 check(r.returncode == 2 and "usage:" in r.stderr, "bad subcommand -> exit 2")
 r = run("--version")
 check(r.returncode == 0 and r.stdout.startswith("wdf_faces "), "--version ok")
+# --help / -h (issue #131): usage on stdout, nothing on stderr, exit 0.
+for flag in ("--help", "-h"):
+    r = run(flag)
+    check(r.returncode == 0 and r.stdout.startswith("usage: wdf_faces ")
+          and "wdf_faces --help | --version" in r.stdout and r.stderr == "",
+          f"{flag} -> usage on stdout, exit 0")
 
 # Unknown / cross-subcommand / malformed options are refused before work.
 r = run("people", "--config", conf, "--bogus", "1")

@@ -107,6 +107,11 @@ case "${faces_out}" in
 	*) fail "wdf_faces --version output unexpected: ${faces_out}" ;;
 esac
 ok "payload contents + wdf_demo/wdf_faces smoke-run"
+# Every command build-apkg.sh stages must answer --help (issue #131); the
+# checker reads the staged list from build-apkg.sh itself.
+python3 "$(dirname "$0")/../tests/test_cli_help.py" "${PKG_DIR}/bin" \
+	|| fail "a shipped command lacks a working --help (see FAIL lines above)"
+ok "--help on every shipped command"
 
 # --- 6. signature ------------------------------------------------------------
 SIGN="${PKG_DIR}/apkg.sign"

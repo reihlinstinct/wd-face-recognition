@@ -5,6 +5,7 @@
 // grouped by person.
 //
 // Usage: wdf_demo <photos_dir> <models_dir> <out_dir> [threads]
+//        wdf_demo --help | --version   (--help: issue #131)
 //
 // The pipeline pieces live in pipeline/src (shared with the indexer since
 // 0.3.0 PR 2, issue #40); only the scan caps and the HTML report are
@@ -45,6 +46,23 @@ std::string html_escape(const std::string& s) {
     return o;
 }
 
+// --help text (issue #131): stdout, exit 0. The bad-args path keeps its
+// one-line usage on stderr with exit 2.
+const char kHelp[] =
+    "usage: wdf_demo <photos_dir> <models_dir> <out_dir> [threads]\n"
+    "       wdf_demo --help | --version\n"
+    "\n"
+    "Scans photos_dir recursively for JPEGs (demo caps: depth 8, 1000 photos),\n"
+    "detects and embeds faces, groups them by person and writes an HTML\n"
+    "contact sheet to out_dir/index.html with face crops in out_dir/crops/.\n"
+    "\n"
+    "  photos_dir   folder of photos to scan\n"
+    "  models_dir   folder with the ncnn models scrfd_500m and mobilefacenet\n"
+    "  out_dir      output folder (created if missing)\n"
+    "  threads      ncnn thread count (default 2)\n"
+    "  -h, --help   show this help and exit\n"
+    "  --version    print the version and exit\n";
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -54,6 +72,10 @@ int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IOLBF, 0);
     if (argc >= 2 && std::strcmp(argv[1], "--version") == 0) {
         std::printf("wdf_demo 0.2.5 (SCRFD-500M + MobileFaceNet, ncnn)\n");
+        return 0;
+    }
+    if (argc >= 2 && (std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0)) {
+        std::fputs(kHelp, stdout);
         return 0;
     }
     if (argc < 4) {
