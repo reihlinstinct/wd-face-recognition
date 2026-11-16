@@ -1,0 +1,237 @@
+name: CI
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly full suite: Sunday 06:00 Israel winter time (04:00 UTC;
+    # runs 07:00 IDT in summer).
+    - cron: '0 4 * * 0'
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: filter
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # Docs-only pull requests skip the heavy jobs; the Run summary gate
+          # still runs and reports them as skipped.
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # --no-renames: a code-to-doc rename still shows the deleted code
+          # path, so it cannot masquerade as docs-only.
+          git diff --no-renames --name-only "origin/${BASE_REF}...HEAD" | tee /tmp/changed.txt
+          # Doc-only allowlist: markdown/rst, license, and exact community
+          # metadata names (no prefix matches) - unknown files run the suite.
+          # Images always run: docs/ images are app assets.
+          if grep -qvEi '\.(md|markdown|rst)$|^LICENSE$|^\.github/(CODEOWNERS|dependabot\.yml|FUNDING\.yml)$|^\.github/ISSUE_TEMPLATE/[^/]+\.(md|yml|yaml)$|^\.github/PULL_REQUEST_TEMPLATE(\.md)?$|^\.github/PULL_REQUEST_TEMPLATE/[^/]+\.md$' /tmp/changed.txt; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+  lint:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check src tests
+      - name: ShellCheck (packaging scripts, when present)
+        run: |
+          shopt -s nullglob
+          scripts=(scripts/*.sh apkg/*.sh)
+          if [ ${#scripts[@]} -gt 0 ]; then
+            shellcheck "${scripts[@]}"
+          else
+            echo "no shell scripts yet - skipping"
+          fi
+  test:
+    needs: [changes]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code == 'true'
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: needs.changes.outputs.code == 'true'
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+        if: needs.changes.outputs.code == 'true'
+      # Coverage gate: >= 80% floor, enforced from day one (house standard).
+      - run: python -m pytest -q --cov=src --cov-report=term --cov-fail-under=80
+        if: needs.changes.outputs.code == 'true'
+  demo-scan-test:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    # Recursive scanner unit tests (issue #24): no ncnn needed, plain g++.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: g++ -std=c++17 -O2 -Wall -Wextra demo/tests/scan_test.cpp demo/src/scan.cpp -o /tmp/scan_test
+      - run: /tmp/scan_test
+      - name: Pipeline unit tests (issue #40 PR 2)
+        # Alignment math, chips, cosine, union-find, jpeg roundtrip: no ncnn.
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libjpeg-dev
+          g++ -std=c++17 -O2 -Wall -Wextra -I pipeline/src pipeline/tests/pipeline_test.cpp pipeline/src/align.cpp pipeline/src/cluster.cpp pipeline/src/jpegio.cpp -ljpeg -o /tmp/pipeline_test
+          /tmp/pipeline_test
+      - name: Demo web path-normalization tests (PHP)
+        # Spaces, shell-escapes, trailing slashes, Hebrew names (issue #24).
+        run: php apkg/web/tests/paths_test.php
+      - name: Demo runner argv tests (PHP)
+        # Hebrew/spaced/injection-shaped argv survive under LC_CTYPE=C (issue #24).
+        run: php apkg/web/tests/exec_test.php
+      - name: Demo web folder-browser tests (PHP)
+        # /shares-restricted listing, symlink guards, escaped output (issue #26).
+        run: php apkg/web/tests/browse_test.php
+      - name: Demo form markup tests (PHP)
+        # PIN field stays masked but opts out of password managers (issue #29).
+        run: php apkg/web/tests/form_test.php
+      - name: Demo async-run status tests (PHP)
+        # Detached job, log parsing, progress + ETA (issue #33).
+        run: php apkg/web/tests/status_test.php && php apkg/web/tests/async_test.php
+      - name: Demo results endpoint tests (PHP)
+        # In-browser results: crop guard + URL rewriting (issue #35).
+        run: php apkg/web/tests/results_test.php
+      - name: Session auth tests (PHP)
+        # PIN-rotation binding + HTTPS detection (CodeRabbit PR #42).
+        run: php apkg/web/tests/auth_test.php
+      - name: Output-folder settings tests (PHP)
+        # Configurable results folder: validation, migration, cleanup
+        # safety contract (issue #43).
+        run: php apkg/web/tests/settings_test.php
+      - name: People pages tests (PHP)
+        # People list/person/crop backend: config parsing, JSON shape,
+        # escaping, PIN-gated crop serving (issue #50).
+        run: php apkg/web/tests/people_test.php && php apkg/web/tests/people_post_test.php && php apkg/web/tests/roots_test.php && php apkg/web/tests/roots_post_test.php
+      - name: init.sh wfi.conf materialization (issue #56)
+        # Four sandbox states: fresh default, hand-made config adoption,
+        # both-exist backup, persistent-only idempotency.
+        run: sh apkg/tests/init_conf_test.sh
+      - name: preinst.sh quiesces a running indexer
+        run: sh apkg/tests/preinst_test.sh
+  indexer-test:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    # wdf_indexer skeleton (issue #40): mtime-delta walk + SQLite index.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false  # supply-chain hygiene (CodeRabbit #41)
+      - name: Fetch pinned SQLite amalgamation
+        run: indexer/get-sqlite.sh
+      - name: Build indexer + tests
+        run: |
+          gcc -O2 -c indexer/third_party/sqlite3.c -o /tmp/sqlite3.o
+          g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
+            indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \
+            indexer/src/cropreserve.cpp indexer/src/people.cpp indexer/src/lockfile.cpp \
+            pipeline/src/cluster.cpp -I pipeline/src \
+            indexer/tests/indexer_test.cpp /tmp/sqlite3.o -lpthread -ldl -o /tmp/wfi_test
+          g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
+            indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \
+            indexer/src/main.cpp indexer/src/lockfile.cpp /tmp/sqlite3.o -lpthread -ldl -o /tmp/wdf_indexer
+          g++ -O2 -mno-avx -std=c++17 -Wall -Wextra -I indexer/third_party \
+            indexer/src/config.cpp indexer/src/db.cpp indexer/src/walk.cpp \
+            indexer/src/cropreserve.cpp indexer/src/people.cpp indexer/src/lockfile.cpp \
+            pipeline/src/cluster.cpp -I pipeline/src -I indexer/src \
+            indexer/src/faces_main.cpp indexer/tests/process_stub.cpp \
+            /tmp/sqlite3.o -lpthread -ldl -o /tmp/wdf_faces_cli
+      - name: Unit tests (C++)
+        run: /tmp/wfi_test
+      - name: End-to-end test (Python + real binary + real DB)
+        run: python3 indexer/tests/test_indexer.py /tmp/wdf_indexer
+      - name: wdf_faces CLI dispatch test (stub process stage)
+        run: python3 indexer/tests/test_faces_cli.py /tmp/wdf_faces_cli
+
+  security:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: bandit -r src -ll
+  secret-scan:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  summary:
+    permissions:
+      contents: read
+    name: Run summary
+    if: always()
+    needs: [changes, lint, test, demo-scan-test, indexer-test, security, secret-scan]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Write run summary
+        if: always()
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/ci/run_summary.py
+      - name: Fail on failed or cancelled dependencies
+        if: always()
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          # Deliberate docs-only skips are allowed; a failed or cancelled
+          # dependency must fail this gate.
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          bad = {k: v["result"] for k, v in needs.items() if v["result"] not in ("success", "skipped")}
+          if bad:
+              print("Dependencies failed or cancelled:", bad)
+              sys.exit(1)
+          print("All dependencies succeeded or were deliberately skipped.")
+          PY

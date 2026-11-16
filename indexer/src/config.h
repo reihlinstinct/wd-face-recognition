@@ -1,0 +1,49 @@
+#pragma once
+// Indexer config: simple key=value file, '#' comments. Keys:
+//   roots       comma-separated absolute scan roots (under /shares/)
+//   data_dir    where index.db and crops live (RAID volume)
+//   models_dir  SCRFD/MobileFaceNet .param/.bin dir (wdf_faces only)
+//   threads     ncnn thread count for wdf_faces (optional, default 2)
+#include <string>
+#include <vector>
+
+namespace wfi {
+
+struct Config {
+    std::vector<std::string> roots;
+    std::string data_dir;
+    std::string models_dir;  // empty when unset: wdf_faces refuses to run
+    int threads = 2;         // PR4100 N3710: 4 weak cores, keep headroom
+};
+
+// Parses the config file. Returns false on unreadable file or missing keys.
+bool load_config(const std::string& path, Config& out, std::string& err);
+
+// Parses a --threshold CLI value: strtod with full consume, finite, and
+// within the cosine range [-1, 1] (issue #67). False on anything else.
+bool parse_threshold(const char* s, double& out);
+
+// wdf_faces command-line options (after the subcommand).
+struct CliOptions {
+    std::string config_path;
+    std::string models_override;
+    long limit = 500;        // per-invocation cap
+    int threads_override = 0;
+    double threshold = 0.5;  // demo-calibrated cosine cut
+    long id_arg = 0;         // person/rename: --id N (0 = absent)
+    long from_arg = 0;       // merge: --from N
+    long to_arg = 0;         // merge: --to N
+    std::string name_arg;    // rename: --name NAME
+};
+
+// Parses argv[first..] as flag/value pairs for the given subcommand.
+// Every flag needs a value, must be known, and must be supported by that
+// subcommand: process takes --config/--models/--limit/--threads, cluster
+// --config/--threshold, people --config, person --config/--id, rename
+// --config/--id/--name, merge --config/--from/--to (issues #69, #50 PR
+// 3c). Violations are rejected BEFORE the caller opens the index.
+bool parse_cli_options(int argc, char** argv, int first,
+                       const char* subcommand, CliOptions& out,
+                       std::string& err);
+
+}  // namespace wfi

@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.coverage
+coverage.json
+coverage.xml
+test-results.xml
+.pytest_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Pinned SQLite amalgamation is fetched by indexer/get-sqlite.sh (sha256-verified)
+indexer/third_party/sqlite3.c
+indexer/third_party/sqlite3.h
+indexer/third_party/sqlite3ext.h
