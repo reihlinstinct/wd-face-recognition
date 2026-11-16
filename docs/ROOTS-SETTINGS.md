@@ -226,3 +226,11 @@ sees either the old config or the new one, never a mix.
   generation per run is pinned (no observed photo is swept); an
   incomplete overlapping walk suppresses the unconfigured sweep.
 - `DEVICE-TEST.md` gains the roots-editing step.
+
+### Crop garbage-collection failures
+
+`wdf_faces gc` reports `removed`, `kept` and `failed` counts. A crop that
+cannot be unlinked remains on disk, is named on stderr and increments
+`failed`; the command exits nonzero. A genuine directory-listing error also
+fails the command, without presenting partial counts as a complete sweep.
+The two errors are distinguished even when an unlink fails on the last entry.

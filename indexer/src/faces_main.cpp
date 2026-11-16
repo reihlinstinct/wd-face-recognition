@@ -249,9 +249,12 @@ int main(int argc, char** argv) {
         }
         long removed = 0, kept = 0, failed = 0;
         struct dirent* de;
-        errno = 0;
-        while ((de = readdir(d)) != nullptr) {
+        for (;;) {
+            // Only errno from readdir itself identifies a listing error.
+            // fstatat/unlinkat may leave errno set on the final entry.
             errno = 0;
+            de = readdir(d);
+            if (de == nullptr) break;
             const std::string name = de->d_name;
             if (name == "." || name == ".." ||
                 name.find('/') != std::string::npos) continue;

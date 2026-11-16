@@ -260,6 +260,30 @@ else:
     check(r.returncode == 0 and "failed=0" in r.stdout,
           "unremovable crop unlinked under privilege override")
 
+# Deterministic last-entry unlink failure, including privileged runners.
+# The shim exists only in this subprocess; production has no fault hooks.
+from pathlib import Path
+shim = os.path.join(tmp, "gc_fault_shim.so")
+subprocess.run(["g++", "-shared", "-fPIC", "-std=c++17", "-Wall", "-Wextra",
+                str(Path(__file__).with_name("gc_fault_shim.cpp")),
+                "-ldl", "-o", shim], check=True)
+with open(os.path.join(crops, "stuck.jpg"), "w") as f:
+    f.write("x")
+env = dict(os.environ, LD_PRELOAD=shim, WDF_TEST_CROPS=crops)
+r = subprocess.run([BIN, "gc", "--config", conf], capture_output=True,
+                   text=True, env=env)
+check(r.returncode == 1 and r.stdout.strip() == "removed=0 kept=0 failed=1"
+      and "stuck.jpg" in r.stderr and "error reading" not in r.stderr,
+      "last-entry unlink errno is not a directory read failure")
+check(os.path.exists(os.path.join(crops, "stuck.jpg")),
+      "failed unlink preserves the crop")
+env["WDF_TEST_READ_ERROR"] = "1"
+r = subprocess.run([BIN, "gc", "--config", conf], capture_output=True,
+                   text=True, env=env)
+check(r.returncode == 1 and "error reading" in r.stderr and not r.stdout,
+      "real directory read failure still fails closed")
+os.remove(os.path.join(crops, "stuck.jpg"))
+
 # Empty roots (issue #108): only the walk no-ops - every wdf_faces DB
 # command keeps operating on the existing index.
 econf = os.path.join(tmp, "empty.conf")
